@@ -566,3 +566,27 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     if (gWindow) SDL_DestroyWindow(gWindow);
 }
 
+
+objectiveという概念を導入する。
+すなわち、現在表示されている。見る、話す、行くのようなverbに対して、
+空、公園のように目的語に相当するものであり、
+見る、話すのidをparentに持つElementのことである。
+現在、gParentに準じて、構成されたdisplayListのみを表示しているのに加え、
+selectedIndexによって選択されているverbの子たちも含めて表示する。
+そして、自身のobjectが空の場合は、[]で囲み、強調する。
+たとえば'*'のついたものを選択中として、
+*見る　話す　行く
+空
+見る　*[話す]　行く
+no content
+
+見る　話す　*行く
+公園
+のように表示するものである。
+
+入力の仕様の仕様を次のように変更する。
+'i'左の選択肢へ移動。'o'右の選択肢へ移動。'a'verbを選択中のとき、objectiveの段に選択が移動する。そうでない時、なにも起こらない。'u'objectiveを選択中のとき、verbの段に選択が移動する。そうでない時、なにも起こらない。
+つまり、単純にuを押せば、verbが選べるようになり、aを押せばobjectiveが選べるようになる。
+しかし、'f'を押す送信はobjectiveが選べる状態でないと、なにも起こらない。
+つまり、原則としてobjectiveしか送信できない。
+唯一の例外はverbであってもそのpropがisQuote == trueなら送信出来る。
