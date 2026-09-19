@@ -47,9 +47,9 @@ bool noContentState = false;
 SDL_Window *gWindow = nullptr;
 SDL_Renderer *gRenderer = nullptr;
 
-unsigned gScene = 0;
-unsigned gRoot = 0;
-unsigned gParent = 0;
+unsigned gScene = 2;
+unsigned gRoot = 16;
+unsigned gParent = 16;
 unsigned gUnlocks = 0;
 
 void rebuildContainerB();
@@ -67,7 +67,7 @@ bool hasValidObjective(unsigned verbId) {
     unsigned excFlags = (prop >> 56) & 0xFF;
 
     if (parent == verbId && ((gUnlocks & reqFlags) == reqFlags) &&
-        hasRead == 0 && ((gUnlocks & excFlags) == 0)) {
+        hasRead == 0 && (!((gUnlocks & excFlags) == excFlags) || excFlags == 0)) {
       return true;
     }
   }
@@ -179,7 +179,7 @@ void rebuildContainerC() {
     bool cond1 = (parent == gParent);
     bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
     bool cond3 = (hasRead == 0);
-    bool cond4 = ((gUnlocks & excFlags) == 0);
+    bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
 
     if (cond1 && cond2 && cond3 && cond4) {
       containerC.push_back(item);
@@ -236,7 +236,7 @@ void rebuildObjectiveList() {
     bool cond1 = (parent == verbId);
     bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
     bool cond3 = (hasRead == 0);
-    bool cond4 = ((gUnlocks & excFlags) == 0);
+    bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
 
     if (cond1 && cond2 && cond3 && cond4) {
       objectiveList.push_back(item);
@@ -311,9 +311,9 @@ void sendProperty() {
   unsigned id = prop & 0xFF;               // bit 0-7
   unsigned parent = (prop >> 8) & 0xFF;    // bit 8-15
   unsigned newRoot = (prop >> 16) & 0xFF;  // bit 16-23
-  unsigned unlocks = (prop >> 24) & 0xFF;  // bit 24-31
+  unsigned newScene = (prop >> 24) & 0xFF;  // bit 24-31
   bool isOnetime = (prop >> 33) & 0x1;     // bit 33
-  unsigned newScene = (prop >> 40) & 0xFF; // bit 40-47
+  unsigned unlocks = (prop >> 40) & 0xFF; // bit 40-47
 
   gParent = id;
 
@@ -576,7 +576,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
       if (key == SDLK_Y || key == SDLK_N) {
         gInputIsOnetime = (key == SDLK_Y);
 
-        unsigned id = containerA.size() + 1;
+        unsigned id = containerB.size() + 1;
         uint64_t newProp =
             buildProperty(id, gInsertParent, gScene, gInputIsQuote, gInputIsOnetime);
 
