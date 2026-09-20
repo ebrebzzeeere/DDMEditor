@@ -14,20 +14,20 @@
 struct Element {
   std::string text;
   uint64_t prop;
-/* prop bit assignment
-excFlags	56-63
-reqFlags	48-55
-unlocks		40-47
-scene		36-39
-vacant		35
-hasRead		34
-isOnetime	33
-isQuote		32
-newScene	24-31
-newRoot		16-23
-parent		8-15
-id		0-7
-*/
+  /* prop bit assignment
+  excFlags	56-63
+  reqFlags	48-55
+  unlocks		40-47
+  scene		36-39
+  vacant		35
+  hasRead		34
+  isOnetime	33
+  isQuote		32
+  newScene	24-31
+  newRoot		16-23
+  parent		8-15
+  id		0-7
+  */
 };
 
 // グローバル変数
@@ -67,7 +67,8 @@ bool hasValidObjective(unsigned verbId) {
     unsigned excFlags = (prop >> 56) & 0xFF;
 
     if (parent == verbId && ((gUnlocks & reqFlags) == reqFlags) &&
-        hasRead == 0 && (!((gUnlocks & excFlags) == excFlags) || excFlags == 0)) {
+        hasRead == 0 &&
+        (!((gUnlocks & excFlags) == excFlags) || excFlags == 0)) {
       return true;
     }
   }
@@ -151,7 +152,8 @@ void renderConsole() {
     std::cout << std::endl;
   }
 
-  std::cout << "\n(Focus Window -> 'i': Left, 'o': Right, 'a': Select Objective, 'u': Select Verb, 'f': Send, 'q': Quit)"
+  std::cout << "\n(Focus Window -> 'i': Left, 'o': Right, 'a': Select "
+               "Objective, 'u': Select Verb, 'f': Send, 'q': Quit)"
             << std::endl;
   std::cout << std::flush;
 }
@@ -221,9 +223,13 @@ void rebuildObjectiveList() {
   objectiveList.clear();
   selectedObjectiveIndex = 0;
 
-  if (displayList.empty() || selectedIndex >= displayList.size())
+  if (displayList.empty() || selectedIndex >= displayList.size()) {
     return;
-
+  }
+  bool isVerbQuote = displayList[selectedIndex].prop & 0x100000000;
+  if (isVerbQuote) {
+    return;
+  }
   unsigned verbId = displayList[selectedIndex].prop & 0xFF;
   for (const auto &item : containerB) {
     uint64_t prop = item.prop;
@@ -290,17 +296,22 @@ void sendProperty() {
   Element selected;
   if (isObjectiveSelected) {
     if (objectiveList.empty()) {
-      // no content を選択して送信する場合のダミー要素 (prop=0でルート遷移等の効果)
+      // no content を選択して送信する場合のダミー要素
+      // (prop=0でルート遷移等の効果)
       selected = {"no content", 0ULL};
     } else {
-      if (selectedObjectiveIndex >= objectiveList.size()) return;
+      if (selectedObjectiveIndex >= objectiveList.size())
+        return;
       selected = objectiveList[selectedObjectiveIndex];
     }
   } else {
     // Verb選択中：isQuote == true の場合のみ送信許可
+    // あとRootにいなければverbも送信できるようにする。
+    // -> verb かつ onRootなら送信できない。
     Element verb = displayList[selectedIndex];
     bool isQuote = (verb.prop >> 32) & 0x1;
-    if (!isQuote) {
+    bool isOnRoot = ((verb.prop >> 8) & 0xff) == gRoot;
+    if (!isQuote && isOnRoot) {
       return;
     }
     selected = verb;
@@ -311,9 +322,9 @@ void sendProperty() {
   unsigned id = prop & 0xFF;               // bit 0-7
   unsigned parent = (prop >> 8) & 0xFF;    // bit 8-15
   unsigned newRoot = (prop >> 16) & 0xFF;  // bit 16-23
-  unsigned newScene = (prop >> 24) & 0xFF;  // bit 24-31
+  unsigned newScene = (prop >> 24) & 0xFF; // bit 24-31
   bool isOnetime = (prop >> 33) & 0x1;     // bit 33
-  unsigned unlocks = (prop >> 40) & 0xFF; // bit 40-47
+  unsigned unlocks = (prop >> 40) & 0xFF;  // bit 40-47
 
   gParent = id;
 
@@ -484,7 +495,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         gAppMode = MODE_INSERT_TEXT;
         gInputText.clear();
 
-        // Objective段を選択中なら VerbのID を親に、そうでなければ現在の gParent を親にする
+        // Objective段を選択中なら VerbのID を親に、そうでなければ現在の gParent
+        // を親にする
         if (isObjectiveSelected && !displayList.empty()) {
           gInsertParent = displayList[selectedIndex].prop & 0xFF;
         } else {
@@ -499,7 +511,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         if (key == SDLK_O) {
           if (isObjectiveSelected) {
             if (!objectiveList.empty()) {
-              selectedObjectiveIndex = (selectedObjectiveIndex + 1) % objectiveList.size();
+              selectedObjectiveIndex =
+                  (selectedObjectiveIndex + 1) % objectiveList.size();
               needRedraw = true;
             }
           } else {
@@ -510,11 +523,14 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         } else if (key == SDLK_I) {
           if (isObjectiveSelected) {
             if (!objectiveList.empty()) {
-              selectedObjectiveIndex = (selectedObjectiveIndex - 1 + objectiveList.size()) % objectiveList.size();
+              selectedObjectiveIndex =
+                  (selectedObjectiveIndex - 1 + objectiveList.size()) %
+                  objectiveList.size();
               needRedraw = true;
             }
           } else {
-            selectedIndex = (selectedIndex - 1 + displayList.size()) % displayList.size();
+            selectedIndex =
+                (selectedIndex - 1 + displayList.size()) % displayList.size();
             rebuildObjectiveList();
             needRedraw = true;
           }
@@ -577,8 +593,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         gInputIsOnetime = (key == SDLK_Y);
 
         unsigned id = containerB.size() + 1;
-        uint64_t newProp =
-            buildProperty(id, gInsertParent, gScene, gInputIsQuote, gInputIsOnetime);
+        uint64_t newProp = buildProperty(id, gInsertParent, gScene,
+                                         gInputIsQuote, gInputIsOnetime);
 
         Element newElem = {gInputText, newProp};
         containerA.push_back(newElem);
