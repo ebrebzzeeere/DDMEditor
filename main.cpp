@@ -74,8 +74,18 @@ bool hasValidObjective(unsigned verbId) {
 
     if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
       unsigned checkCompletion = 0x0;
-      for (const auto &item : containerB) { // check! nested for loop.
-        uint64_t subProp = item.prop;
+      if (reqFlags == 0) {
+        checkCompletion |= 0x1;
+      }
+      if (excFlags == 0) {
+        checkCompletion |= 0x2;
+      }
+
+      for (const auto &subItem : containerB) { // check! nested for loop.
+        if (item.text == subItem.text) {
+          continue;
+        }
+        uint64_t subProp = subItem.prop;
         if ((subProp & 0xff) == reqFlags) {
           cond2 = (subProp >> 34) & 0x1;
           checkCompletion |= 0x1;
@@ -208,8 +218,12 @@ void rebuildContainerC() {
 
     if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
       unsigned checkCompletion = 0x0;
-      for (const auto &item : containerB) { // check! nested for loop.
-        uint64_t subProp = item.prop;
+      for (const auto &subItem : containerB) { // check! nested for loop.
+        if (item.text == subItem.text) {
+          continue;
+        }
+
+        uint64_t subProp = subItem.prop;
         if ((subProp & 0xff) == reqFlags) {
           cond2 = (subProp >> 34) & 0x1;
           checkCompletion |= 0x1;
@@ -288,8 +302,12 @@ void rebuildObjectiveList() {
 
     if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
       unsigned checkCompletion = 0x0;
-      for (const auto &item : containerB) { // check! nested for loop.
-        uint64_t subProp = item.prop;
+      for (const auto &subItem : containerB) { // check! nested for loop.
+        if (item.text == subItem.text) {
+          continue;
+        }
+
+        uint64_t subProp = subItem.prop;
         if ((subProp & 0xff) == reqFlags) {
           cond2 = (subProp >> 34) & 0x1;
           checkCompletion |= 0x1;
