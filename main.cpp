@@ -17,15 +17,15 @@ struct Element {
   /* prop bit assignment
   excFlags	56-63
   reqFlags	48-55
-  unlocks		40-47
+  unlocks	40-47
   scene		36-39
-  vacant		35
-  hasRead		34
+  flagsFormat	35 // If 1 read req/excFlags as Flags, nor as id to check
+  hasRead	34
   isOnetime	33
-  isQuote		32
+  isQuote	32
   newScene	24-31
-  newRoot		16-23
-  parent		8-15
+  newRoot	16-23
+  parent	8-15
   id		0-7
   */
 };
@@ -65,10 +65,32 @@ bool hasValidObjective(unsigned verbId) {
     unsigned hasRead = (prop >> 34) & 0x1;
     unsigned reqFlags = (prop >> 48) & 0xFF;
     unsigned excFlags = (prop >> 56) & 0xFF;
+    unsigned flagsFormat = (prop >> 35) & 0x1;
 
-    if (parent == verbId && ((gUnlocks & reqFlags) == reqFlags) &&
-        hasRead == 0 &&
-        (!((gUnlocks & excFlags) == excFlags) || excFlags == 0)) {
+    bool cond1 = (parent == verbId);
+    bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
+    bool cond3 = (hasRead == 0);
+    bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
+
+    if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
+      unsigned checkCompletion = 0x0;
+      for (const auto &item : containerB) { // check! nested for loop.
+        uint64_t subProp = item.prop;
+        if ((subProp & 0xff) == reqFlags) {
+          cond2 = (subProp >> 34) & 0x1;
+          checkCompletion |= 0x1;
+        }
+        if ((subProp & 0xff) == excFlags) {
+          cond4 = !((subProp >> 34) & 0x1);
+          checkCompletion |= 0x2;
+        }
+        if (checkCompletion == 0x3) {
+          break;
+        }
+      }
+    }
+
+    if (cond1 && cond2 && cond3 && cond4) {
       return true;
     }
   }
@@ -177,11 +199,30 @@ void rebuildContainerC() {
     unsigned hasRead = (prop >> 34) & 0x1;
     unsigned reqFlags = (prop >> 48) & 0xFF;
     unsigned excFlags = (prop >> 56) & 0xFF;
+    unsigned flagsFormat = (prop >> 35) & 0x1;
 
     bool cond1 = (parent == gParent);
     bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
     bool cond3 = (hasRead == 0);
     bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
+
+    if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
+      unsigned checkCompletion = 0x0;
+      for (const auto &item : containerB) { // check! nested for loop.
+        uint64_t subProp = item.prop;
+        if ((subProp & 0xff) == reqFlags) {
+          cond2 = (subProp >> 34) & 0x1;
+          checkCompletion |= 0x1;
+        }
+        if ((subProp & 0xff) == excFlags) {
+          cond4 = !((subProp >> 34) & 0x1);
+          checkCompletion |= 0x2;
+        }
+        if (checkCompletion == 0x3) {
+          break;
+        }
+      }
+    }
 
     if (cond1 && cond2 && cond3 && cond4) {
       containerC.push_back(item);
@@ -238,11 +279,30 @@ void rebuildObjectiveList() {
     unsigned hasRead = (prop >> 34) & 0x1;
     unsigned reqFlags = (prop >> 48) & 0xFF;
     unsigned excFlags = (prop >> 56) & 0xFF;
+    unsigned flagsFormat = (prop >> 35) & 0x1;
 
     bool cond1 = (parent == verbId);
     bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
     bool cond3 = (hasRead == 0);
     bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
+
+    if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
+      unsigned checkCompletion = 0x0;
+      for (const auto &item : containerB) { // check! nested for loop.
+        uint64_t subProp = item.prop;
+        if ((subProp & 0xff) == reqFlags) {
+          cond2 = (subProp >> 34) & 0x1;
+          checkCompletion |= 0x1;
+        }
+        if ((subProp & 0xff) == excFlags) {
+          cond4 = !((subProp >> 34) & 0x1);
+          checkCompletion |= 0x2;
+        }
+        if (checkCompletion == 0x3) {
+          break;
+        }
+      }
+    }
 
     if (cond1 && cond2 && cond3 && cond4) {
       objectiveList.push_back(item);
@@ -351,6 +411,7 @@ void sendProperty() {
 
     if (newRoot != 0) {
       gRoot = newRoot;
+      gUnlocks = 0x0; // リセットする。
     }
   }
 
