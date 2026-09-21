@@ -23,8 +23,8 @@ struct Element {
   hasRead	34
   isOnetime	33
   isQuote	32
-  newScene	24-31
-  newRoot	16-23
+  newRoot	24-31
+  child 	16-23
   parent	8-15
   id		0-7
   */
@@ -61,6 +61,7 @@ void rebuildObjectiveList();
 bool hasValidObjective(unsigned verbId) {
   for (const auto &item : containerB) {
     uint64_t prop = item.prop;
+
     unsigned parent = (prop >> 8) & 0xFF;
     unsigned hasRead = (prop >> 34) & 0x1;
     unsigned reqFlags = (prop >> 48) & 0xFF;
@@ -73,6 +74,7 @@ bool hasValidObjective(unsigned verbId) {
     bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
 
     if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
+
       unsigned checkCompletion = 0x0;
       if (reqFlags == 0) {
         checkCompletion |= 0x1;
@@ -144,7 +146,23 @@ void renderConsole() {
   for (size_t i = 0; i < displayList.size(); ++i) {
     bool isSelectedVerb = (i == selectedIndex);
     unsigned verbId = displayList[i].prop & 0xFF;
-    bool hasObj = hasValidObjective(verbId);
+    unsigned verbChild = (displayList[i].prop >> 16) & 0xFF;
+
+    bool hasObj = false;
+    if (verbChild) {
+      for (const auto &item : containerB) {
+        if ((item.prop & 0xff) == verbChild) {
+          if (item.text == "dummy") {
+            hasObj = hasValidObjective(item.prop & 0xff);
+          } else {
+            hasObj = true;
+          }
+          break;
+        }
+      }
+    } else {
+      hasObj = hasValidObjective(verbId);
+    }
 
     std::string itemText = displayList[i].text;
     if (!hasObj) {
@@ -206,6 +224,7 @@ void rebuildContainerC() {
     uint64_t prop = item.prop;
 
     unsigned parent = (prop >> 8) & 0xFF;
+    unsigned child = (prop >> 16) & 0xff;
     unsigned hasRead = (prop >> 34) & 0x1;
     unsigned reqFlags = (prop >> 48) & 0xFF;
     unsigned excFlags = (prop >> 56) & 0xFF;
@@ -217,7 +236,15 @@ void rebuildContainerC() {
     bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
 
     if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
+
       unsigned checkCompletion = 0x0;
+      if (reqFlags == 0) {
+        checkCompletion |= 0x1;
+      }
+      if (excFlags == 0) {
+        checkCompletion |= 0x2;
+      }
+
       for (const auto &subItem : containerB) { // check! nested for loop.
         if (item.text == subItem.text) {
           continue;
@@ -286,6 +313,21 @@ void rebuildObjectiveList() {
     return;
   }
   unsigned verbId = displayList[selectedIndex].prop & 0xFF;
+  unsigned verbChild = (displayList[selectedIndex].prop >> 16) & 0xFF;
+  if (verbChild) {
+    for (const auto &item : containerB) {
+      if ((item.prop & 0xff) == verbChild) {
+        if (item.text == "dummy") {
+          verbId = item.prop & 0xff;
+        } else {
+          objectiveList.push_back(item);
+          return;
+        }
+        break;
+      }
+    }
+  }
+
   for (const auto &item : containerB) {
     uint64_t prop = item.prop;
 
@@ -301,7 +343,15 @@ void rebuildObjectiveList() {
     bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
 
     if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
+
       unsigned checkCompletion = 0x0;
+      if (reqFlags == 0) {
+        checkCompletion |= 0x1;
+      }
+      if (excFlags == 0) {
+        checkCompletion |= 0x2;
+      }
+
       for (const auto &subItem : containerB) { // check! nested for loop.
         if (item.text == subItem.text) {
           continue;
@@ -397,17 +447,24 @@ void sendProperty() {
 
   uint64_t prop = selected.prop;
 
-  unsigned id = prop & 0xFF;               // bit 0-7
-  unsigned parent = (prop >> 8) & 0xFF;    // bit 8-15
-  unsigned newRoot = (prop >> 16) & 0xFF;  // bit 16-23
-  unsigned newScene = (prop >> 24) & 0xFF; // bit 24-31
-  bool isOnetime = (prop >> 33) & 0x1;     // bit 33
-  unsigned unlocks = (prop >> 40) & 0xFF;  // bit 40-47
+  unsigned id = prop & 0xFF;            // bit 0-7
+  unsigned parent = (prop >> 8) & 0xFF; // bit 8-15
+  unsigned child = (prop >> 16) & 0xff;
+  unsigned newRoot = (prop >> 24) & 0xFF; // bit 24-31
+  unsigned newScene = 0x0;
+  bool isOnetime = (prop >> 33) & 0x1;    // bit 33
+  unsigned unlocks = (prop >> 40) & 0xFF; // bit 40-47
 
-  gParent = id;
-
-  if (unlocks == 0 && newRoot != 0 && newRoot <= 8) {
-    unlocks = 1u << (newRoot - 1);
+  if (child) {
+    for (const auto &item : containerB) {
+      if ((item.prop & 0xff) == child) {
+        if (item.text == "dummy") {
+          gParent = item.prop & 0xff;
+        }
+      }
+    }
+  } else {
+    gParent = id;
   }
 
   if (isOnetime) {
@@ -417,6 +474,10 @@ void sendProperty() {
         break;
       }
     }
+  }
+
+  if ((selected.prop >> 56) == 0xff) {
+    newScene = newRoot;
   }
 
   if (newScene != 0) {
@@ -574,8 +635,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         gAppMode = MODE_INSERT_TEXT;
         gInputText.clear();
 
-        // Objective段を選択中なら VerbのID を親に、そうでなければ現在の gParent
-        // を親にする
+        // Objective段を選択中なら VerbのID を親に、そうでなければ現在の
+        // gParent を親にする
         if (isObjectiveSelected && !displayList.empty()) {
           gInsertParent = displayList[selectedIndex].prop & 0xFF;
         } else {
@@ -732,7 +793,10 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
   std::ofstream ofs("../dd.txt");
   if (ofs.is_open()) {
     for (auto item : containerA) {
-      item.prop &= ~(1ULL << 34);
+      if (item.text == "dummy") {
+      } else {
+        item.prop &= ~(1ULL << 34);
+      }
 
       ofs << "'" << item.text << "', '0x" << std::hex << std::setw(16)
           << std::setfill('0') << item.prop << "',\n";
