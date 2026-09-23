@@ -224,7 +224,6 @@ void rebuildContainerC() {
     uint64_t prop = item.prop;
 
     unsigned parent = (prop >> 8) & 0xFF;
-    unsigned child = (prop >> 16) & 0xff;
     unsigned hasRead = (prop >> 34) & 0x1;
     unsigned reqFlags = (prop >> 48) & 0xFF;
     unsigned excFlags = (prop >> 56) & 0xFF;
@@ -267,6 +266,12 @@ void rebuildContainerC() {
 
     if (cond1 && cond2 && cond3 && cond4) {
       containerC.push_back(item);
+      // 子にdummyがいたら、最優先で処理される。
+      if (item.text == "dummy") {
+        gParent = item.prop & 0xff;
+        rebuildContainerC();
+        return;
+      }
     }
   }
 }
@@ -327,55 +332,64 @@ void rebuildObjectiveList() {
       }
     }
   }
+  bool hasDummy = false;
+  do {
+    hasDummy = false;
+    for (const auto &item : containerB) {
+      uint64_t prop = item.prop;
 
-  for (const auto &item : containerB) {
-    uint64_t prop = item.prop;
+      unsigned parent = (prop >> 8) & 0xFF;
+      unsigned hasRead = (prop >> 34) & 0x1;
+      unsigned reqFlags = (prop >> 48) & 0xFF;
+      unsigned excFlags = (prop >> 56) & 0xFF;
+      unsigned flagsFormat = (prop >> 35) & 0x1;
 
-    unsigned parent = (prop >> 8) & 0xFF;
-    unsigned hasRead = (prop >> 34) & 0x1;
-    unsigned reqFlags = (prop >> 48) & 0xFF;
-    unsigned excFlags = (prop >> 56) & 0xFF;
-    unsigned flagsFormat = (prop >> 35) & 0x1;
+      bool cond1 = (parent == verbId);
+      bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
+      bool cond3 = (hasRead == 0);
+      bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
 
-    bool cond1 = (parent == verbId);
-    bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
-    bool cond3 = (hasRead == 0);
-    bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
+      if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
 
-    if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
-
-      unsigned checkCompletion = 0x0;
-      if (reqFlags == 0) {
-        checkCompletion |= 0x1;
-      }
-      if (excFlags == 0) {
-        checkCompletion |= 0x2;
-      }
-
-      for (const auto &subItem : containerB) { // check! nested for loop.
-        if (item.text == subItem.text) {
-          continue;
-        }
-
-        uint64_t subProp = subItem.prop;
-        if ((subProp & 0xff) == reqFlags) {
-          cond2 = (subProp >> 34) & 0x1;
+        unsigned checkCompletion = 0x0;
+        if (reqFlags == 0) {
           checkCompletion |= 0x1;
         }
-        if ((subProp & 0xff) == excFlags) {
-          cond4 = !((subProp >> 34) & 0x1);
+        if (excFlags == 0) {
           checkCompletion |= 0x2;
         }
-        if (checkCompletion == 0x3) {
-          break;
+
+        for (const auto &subItem : containerB) { // check! nested for loop.
+          if (item.text == subItem.text) {
+            continue;
+          }
+
+          uint64_t subProp = subItem.prop;
+          if ((subProp & 0xff) == reqFlags) {
+            cond2 = (subProp >> 34) & 0x1;
+            checkCompletion |= 0x1;
+          }
+          if ((subProp & 0xff) == excFlags) {
+            cond4 = !((subProp >> 34) & 0x1);
+            checkCompletion |= 0x2;
+          }
+          if (checkCompletion == 0x3) {
+            break;
+          }
         }
       }
-    }
 
-    if (cond1 && cond2 && cond3 && cond4) {
-      objectiveList.push_back(item);
+      if (cond1 && cond2 && cond3 && cond4) {
+        // dummyがいたら、dummyを親にしてやりなおし。
+        if (item.text == "dummy") {
+          verbId = item.prop & 0xff;
+          hasDummy = true;
+          break;
+        }
+        objectiveList.push_back(item);
+      }
     }
-  }
+  } while (hasDummy);
 }
 
 void processContainerLifecycle() {
@@ -460,6 +474,16 @@ void sendProperty() {
       if ((item.prop & 0xff) == child) {
         if (item.text == "dummy") {
           gParent = item.prop & 0xff;
+        } else {
+          containerC.clear();
+          containerC.push_back(item);
+          isObjectiveSelected = false;
+          noContentState = false;
+          rebuildDisplayList();
+          rebuildObjectiveList();
+
+          needRedraw = true;
+          return;
         }
       }
     }
