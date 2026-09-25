@@ -180,34 +180,35 @@ void renderConsole() {
   std::cout << std::endl;
 
   // --- 2段目: Objective の表示 ---
-  if (objectiveList.empty()) {
-    if (isObjectiveSelected) {
-      std::cout << "\033[31m*no content\033[0m" << std::endl;
-    } else {
-      std::cout << "\033[90mno content\033[0m" << std::endl;
-    }
-  } else {
-    for (size_t j = 0; j < objectiveList.size(); ++j) {
-      std::string objText = objectiveList[j].text;
-      if (objText.empty()) {
-        objText = "[空]";
-      }
+  if (gRoot == gParent) {
 
-      if (j == selectedObjectiveIndex && isObjectiveSelected) {
-        std::cout << "\033[31m*" << objText << "\033[0m ";
+    if (objectiveList.empty()) {
+      if (isObjectiveSelected) {
+        std::cout << "\033[31m*no content\033[0m" << std::endl;
       } else {
-        std::cout << "\033[37m" << objText << "\033[0m ";
+        std::cout << "\033[90mno content\033[0m" << std::endl;
       }
-    }
-    std::cout << std::endl;
-  }
+    } else {
+      for (size_t j = 0; j < objectiveList.size(); ++j) {
+        std::string objText = objectiveList[j].text;
+        if (objText.empty()) {
+          objText = "[空]";
+        }
 
+        if (j == selectedObjectiveIndex && isObjectiveSelected) {
+          std::cout << "\033[31m*" << objText << "\033[0m ";
+        } else {
+          std::cout << "\033[37m" << objText << "\033[0m ";
+        }
+      }
+      std::cout << std::endl;
+    }
+  }
   std::cout << "\n(Focus Window -> 'i': Left, 'o': Right, 'a': Select "
                "Objective, 'u': Select Verb, 'f': Send, 'q': Quit)"
             << std::endl;
   std::cout << std::flush;
 }
-
 void rebuildContainerB() {
   containerB.clear();
   for (const auto &item : containerA) {
@@ -700,7 +701,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
           }
         } else if (key == SDLK_A) {
           // Verb選択中の場合、Objectiveの段に移動（Objectiveが空でも移動可能に変更）
-          if (!isObjectiveSelected) {
+          if (!isObjectiveSelected && gParent == gRoot) {
             isObjectiveSelected = true;
             selectedObjectiveIndex = 0;
             needRedraw = true;
