@@ -48,8 +48,8 @@ SDL_Window *gWindow = nullptr;
 SDL_Renderer *gRenderer = nullptr;
 
 unsigned gScene = 2;
-unsigned gRoot = 16;
-unsigned gParent = 16;
+unsigned gRoot = 0;
+unsigned gParent = 0;
 unsigned gUnlocks = 0;
 
 void rebuildContainerB();
