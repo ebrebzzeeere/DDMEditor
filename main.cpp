@@ -14,8 +14,8 @@
 struct Element {
   std::string text;
   uint64_t prop;
-  /* prop bit assignment
-  excFlags	56-63
+  /* former prop bit assignment
+  excFlags	56-63 // if ff, treat newRoot as newScene.
   reqFlags	48-55
   unlocks	40-47
   scene		36-39
@@ -28,6 +28,25 @@ struct Element {
   parent	8-15
   id		0-7
   */
+
+  /* new prop bit assignment
+  slot3 56-63 (0:timerTarget,1:newScene,2:,3:)
+  slot2 48-55 (0:newRoot,1:unlocks,2:,3:)
+  slot1 40-47 (0:child,1:excFlags,2:,3: )
+  slot0 32-39 (0:reqFlags,1:timerSetter,2:,3: )
+  slot3Index 30,31
+  slot2Index 28,29
+  slot1Index 26,27
+  slot0Index 24,25
+  scene		20-23
+  vacant	19
+  isOnetime	18
+  isQuote	17
+  hasRead	16
+  parent	8-15
+  id		0-7
+  */
+
 };
 
 // グローバル変数
@@ -47,7 +66,7 @@ bool noContentState = false;
 SDL_Window *gWindow = nullptr;
 SDL_Renderer *gRenderer = nullptr;
 
-unsigned gScene = 2;
+unsigned gScene = 3;
 unsigned gRoot = 0;
 unsigned gParent = 0;
 unsigned gUnlocks = 0;
@@ -108,7 +127,6 @@ bool hasValidObjective(unsigned verbId) {
   }
   return false;
 }
-
 void renderConsole() {
   std::cout << "\033[2J\033[1;1H";
 
