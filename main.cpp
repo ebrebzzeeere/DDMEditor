@@ -49,6 +49,53 @@ struct Element {
 
 };
 
+// --- ヘルパー関数: プロパティのフィールド抽出 (new prop bit assignment準拠) ---
+inline uint8_t getPropID(uint64_t prop) { return prop & 0xFF; }
+inline uint8_t getPropParent(uint64_t prop) { return (prop >> 8) & 0xFF; }
+inline bool getPropHasRead(uint64_t prop) { return (prop >> 16) & 0x1; }
+inline bool getPropIsQuote(uint64_t prop) { return (prop >> 17) & 0x1; }
+inline bool getPropIsOnetime(uint64_t prop) { return (prop >> 18) & 0x1; }
+inline uint8_t getPropScene(uint64_t prop) { return (prop >> 20) & 0xF; }
+
+// Slot 0: bits 32-39, index: bits 24-25 (0: reqFlags, 1: timerSetter)
+inline uint8_t getPropReqFlags(uint64_t prop) {
+  return (((prop >> 24) & 0x3) == 0) ? ((prop >> 32) & 0xFF) : 0;
+}
+inline uint8_t getPropTimerSetter(uint64_t prop) {
+  return (((prop >> 24) & 0x3) == 1) ? ((prop >> 32) & 0xFF) : 0;
+}
+
+// Slot 1: bits 40-47, index: bits 26-27 (0: child, 1: excFlags)
+inline uint8_t getPropChild(uint64_t prop) {
+  return (((prop >> 26) & 0x3) == 0) ? ((prop >> 40) & 0xFF) : 0;
+}
+inline uint8_t getPropExcFlags(uint64_t prop) {
+  return (((prop >> 26) & 0x3) == 1) ? ((prop >> 40) & 0xFF) : 0;
+}
+
+// Slot 2: bits 48-55, index: bits 28-29 (0: newRoot, 1: unlocks)
+inline uint8_t getPropNewRoot(uint64_t prop) {
+  return (((prop >> 28) & 0x3) == 0) ? ((prop >> 48) & 0xFF) : 0;
+}
+inline uint8_t getPropUnlocks(uint64_t prop) {
+  return (((prop >> 28) & 0x3) == 1) ? ((prop >> 48) & 0xFF) : 0;
+}
+
+// Slot 3: bits 56-63, index: bits 30-31 (0: timerTarget, 1: newScene)
+inline uint8_t getPropTimerTarget(uint64_t prop) {
+  return (((prop >> 30) & 0x3) == 0) ? ((prop >> 56) & 0xFF) : 0;
+}
+inline uint8_t getPropNewScene(uint64_t prop) {
+  return (((prop >> 30) & 0x3) == 1) ? ((prop >> 56) & 0xFF) : 0;
+}
+
+inline uint8_t getSlotIndex(uint64_t prop, uint8_t slot) {
+  return (prop >> (24 + slot * 2)) & 0x3;
+}
+inline uint8_t getSlotValue(uint64_t prop, uint8_t slot) {
+  return (prop >> (32 + slot * 8)) & 0xFF;
+}
+
 // グローバル変数
 std::vector<Element> containerA;
 std::vector<Element> containerB;
@@ -81,45 +128,15 @@ bool hasValidObjective(unsigned verbId) {
   for (const auto &item : containerB) {
     uint64_t prop = item.prop;
 
-    unsigned parent = (prop >> 8) & 0xFF;
-    unsigned hasRead = (prop >> 34) & 0x1;
-    unsigned reqFlags = (prop >> 48) & 0xFF;
-    unsigned excFlags = (prop >> 56) & 0xFF;
-    unsigned flagsFormat = (prop >> 35) & 0x1;
+    unsigned parent = getPropParent(prop);
+    bool hasRead = getPropHasRead(prop);
+    unsigned reqFlags = getPropReqFlags(prop);
+    unsigned excFlags = getPropExcFlags(prop);
 
     bool cond1 = (parent == verbId);
     bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
-    bool cond3 = (hasRead == 0);
+    bool cond3 = !hasRead;
     bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
-
-    if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
-
-      unsigned checkCompletion = 0x0;
-      if (reqFlags == 0) {
-        checkCompletion |= 0x1;
-      }
-      if (excFlags == 0) {
-        checkCompletion |= 0x2;
-      }
-
-      for (const auto &subItem : containerB) { // check! nested for loop.
-        if (item.text == subItem.text) {
-          continue;
-        }
-        uint64_t subProp = subItem.prop;
-        if ((subProp & 0xff) == reqFlags) {
-          cond2 = (subProp >> 34) & 0x1;
-          checkCompletion |= 0x1;
-        }
-        if ((subProp & 0xff) == excFlags) {
-          cond4 = !((subProp >> 34) & 0x1);
-          checkCompletion |= 0x2;
-        }
-        if (checkCompletion == 0x3) {
-          break;
-        }
-      }
-    }
 
     if (cond1 && cond2 && cond3 && cond4) {
       return true;
@@ -163,15 +180,15 @@ void renderConsole() {
   // --- 1段目: Verb の表示 ---
   for (size_t i = 0; i < displayList.size(); ++i) {
     bool isSelectedVerb = (i == selectedIndex);
-    unsigned verbId = displayList[i].prop & 0xFF;
-    unsigned verbChild = (displayList[i].prop >> 16) & 0xFF;
+    unsigned verbId = getPropID(displayList[i].prop);
+    unsigned verbChild = getPropChild(displayList[i].prop);
 
     bool hasObj = false;
     if (verbChild) {
       for (const auto &item : containerB) {
-        if ((item.prop & 0xff) == verbChild) {
+        if (getPropID(item.prop) == verbChild) {
           if (item.text == "dummy") {
-            hasObj = hasValidObjective(item.prop & 0xff);
+            hasObj = hasValidObjective(getPropID(item.prop));
           } else {
             hasObj = true;
           }
@@ -230,7 +247,7 @@ void renderConsole() {
 void rebuildContainerB() {
   containerB.clear();
   for (const auto &item : containerA) {
-    unsigned scene = (item.prop >> 36) & 0xF;
+    unsigned scene = getPropScene(item.prop);
     if (scene == gScene) {
       containerB.push_back(item);
     }
@@ -242,52 +259,21 @@ void rebuildContainerC() {
   for (const auto &item : containerB) {
     uint64_t prop = item.prop;
 
-    unsigned parent = (prop >> 8) & 0xFF;
-    unsigned hasRead = (prop >> 34) & 0x1;
-    unsigned reqFlags = (prop >> 48) & 0xFF;
-    unsigned excFlags = (prop >> 56) & 0xFF;
-    unsigned flagsFormat = (prop >> 35) & 0x1;
+    unsigned parent = getPropParent(prop);
+    bool hasRead = getPropHasRead(prop);
+    unsigned reqFlags = getPropReqFlags(prop);
+    unsigned excFlags = getPropExcFlags(prop);
 
     bool cond1 = (parent == gParent);
     bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
-    bool cond3 = (hasRead == 0);
+    bool cond3 = !hasRead;
     bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
-
-    if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
-
-      unsigned checkCompletion = 0x0;
-      if (reqFlags == 0) {
-        checkCompletion |= 0x1;
-      }
-      if (excFlags == 0) {
-        checkCompletion |= 0x2;
-      }
-
-      for (const auto &subItem : containerB) { // check! nested for loop.
-        if (item.text == subItem.text) {
-          continue;
-        }
-
-        uint64_t subProp = subItem.prop;
-        if ((subProp & 0xff) == reqFlags) {
-          cond2 = (subProp >> 34) & 0x1;
-          checkCompletion |= 0x1;
-        }
-        if ((subProp & 0xff) == excFlags) {
-          cond4 = !((subProp >> 34) & 0x1);
-          checkCompletion |= 0x2;
-        }
-        if (checkCompletion == 0x3) {
-          break;
-        }
-      }
-    }
 
     if (cond1 && cond2 && cond3 && cond4) {
       containerC.push_back(item);
       // 子にdummyがいたら、最優先で処理される。
       if (item.text == "dummy") {
-        gParent = item.prop & 0xff;
+        gParent = getPropID(item.prop);
         rebuildContainerC();
         return;
       }
@@ -305,8 +291,8 @@ void rebuildDisplayList() {
 
     std::vector<Element> candidates;
     for (const auto &item : containerC) {
-      bool isOnetime = (item.prop >> 33) & 0x1;
-      bool isQuote = (item.prop >> 32) & 0x1;
+      bool isOnetime = getPropIsOnetime(item.prop);
+      bool isQuote = getPropIsQuote(item.prop);
       if (isOnetime && isQuote) {
         candidates.push_back(item);
       }
@@ -332,17 +318,17 @@ void rebuildObjectiveList() {
   if (displayList.empty() || selectedIndex >= displayList.size()) {
     return;
   }
-  bool isVerbQuote = displayList[selectedIndex].prop & 0x100000000;
+  bool isVerbQuote = getPropIsQuote(displayList[selectedIndex].prop);
   if (isVerbQuote) {
     return;
   }
-  unsigned verbId = displayList[selectedIndex].prop & 0xFF;
-  unsigned verbChild = (displayList[selectedIndex].prop >> 16) & 0xFF;
+  unsigned verbId = getPropID(displayList[selectedIndex].prop);
+  unsigned verbChild = getPropChild(displayList[selectedIndex].prop);
   if (verbChild) {
     for (const auto &item : containerB) {
-      if ((item.prop & 0xff) == verbChild) {
+      if (getPropID(item.prop) == verbChild) {
         if (item.text == "dummy") {
-          verbId = item.prop & 0xff;
+          verbId = getPropID(item.prop);
         } else {
           objectiveList.push_back(item);
           return;
@@ -357,51 +343,20 @@ void rebuildObjectiveList() {
     for (const auto &item : containerB) {
       uint64_t prop = item.prop;
 
-      unsigned parent = (prop >> 8) & 0xFF;
-      unsigned hasRead = (prop >> 34) & 0x1;
-      unsigned reqFlags = (prop >> 48) & 0xFF;
-      unsigned excFlags = (prop >> 56) & 0xFF;
-      unsigned flagsFormat = (prop >> 35) & 0x1;
+      unsigned parent = getPropParent(prop);
+      bool hasRead = getPropHasRead(prop);
+      unsigned reqFlags = getPropReqFlags(prop);
+      unsigned excFlags = getPropExcFlags(prop);
 
       bool cond1 = (parent == verbId);
       bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
-      bool cond3 = (hasRead == 0);
+      bool cond3 = !hasRead;
       bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
-
-      if (flagsFormat == 0 && (reqFlags != 0x0 || excFlags != 0x0)) {
-
-        unsigned checkCompletion = 0x0;
-        if (reqFlags == 0) {
-          checkCompletion |= 0x1;
-        }
-        if (excFlags == 0) {
-          checkCompletion |= 0x2;
-        }
-
-        for (const auto &subItem : containerB) { // check! nested for loop.
-          if (item.text == subItem.text) {
-            continue;
-          }
-
-          uint64_t subProp = subItem.prop;
-          if ((subProp & 0xff) == reqFlags) {
-            cond2 = (subProp >> 34) & 0x1;
-            checkCompletion |= 0x1;
-          }
-          if ((subProp & 0xff) == excFlags) {
-            cond4 = !((subProp >> 34) & 0x1);
-            checkCompletion |= 0x2;
-          }
-          if (checkCompletion == 0x3) {
-            break;
-          }
-        }
-      }
 
       if (cond1 && cond2 && cond3 && cond4) {
         // dummyがいたら、dummyを親にしてやりなおし。
         if (item.text == "dummy") {
-          verbId = item.prop & 0xff;
+          verbId = getPropID(item.prop);
           hasDummy = true;
           break;
         }
@@ -470,8 +425,8 @@ void sendProperty() {
     // あとRootにいなければverbも送信できるようにする。
     // -> verb かつ onRootなら送信できない。
     Element verb = displayList[selectedIndex];
-    bool isQuote = (verb.prop >> 32) & 0x1;
-    bool isOnRoot = ((verb.prop >> 8) & 0xff) == gRoot;
+    bool isQuote = getPropIsQuote(verb.prop);
+    bool isOnRoot = (getPropParent(verb.prop) == gRoot);
     if (!isQuote && isOnRoot) {
       return;
     }
@@ -480,19 +435,19 @@ void sendProperty() {
 
   uint64_t prop = selected.prop;
 
-  unsigned id = prop & 0xFF;            // bit 0-7
-  unsigned parent = (prop >> 8) & 0xFF; // bit 8-15
-  unsigned child = (prop >> 16) & 0xff;
-  unsigned newRoot = (prop >> 24) & 0xFF; // bit 24-31
-  unsigned newScene = 0x0;
-  bool isOnetime = (prop >> 33) & 0x1;    // bit 33
-  unsigned unlocks = (prop >> 40) & 0xFF; // bit 40-47
+  unsigned id = getPropID(prop);
+  unsigned parent = getPropParent(prop);
+  unsigned child = getPropChild(prop);
+  unsigned newRoot = getPropNewRoot(prop);
+  unsigned newScene = getPropNewScene(prop);
+  bool isOnetime = getPropIsOnetime(prop);
+  unsigned unlocks = getPropUnlocks(prop);
 
   if (child) {
     for (const auto &item : containerB) {
-      if ((item.prop & 0xff) == child) {
+      if (getPropID(item.prop) == child) {
         if (item.text == "dummy") {
-          gParent = item.prop & 0xff;
+          gParent = getPropID(item.prop);
         } else {
           containerC.clear();
           containerC.push_back(item);
@@ -513,14 +468,10 @@ void sendProperty() {
   if (isOnetime) {
     for (auto &item : containerA) {
       if (item.text == selected.text && item.prop == selected.prop) {
-        item.prop |= (1ULL << 34);
+        item.prop |= (1ULL << 16); // hasRead (bit 16)
         break;
       }
     }
-  }
-
-  if ((selected.prop >> 56) == 0xff) {
-    newScene = newRoot;
   }
 
   if (newScene != 0) {
@@ -560,13 +511,13 @@ unsigned gInsertParent = 0;
 uint64_t buildProperty(unsigned id, unsigned parent, unsigned scene,
                        bool isQuote, bool isOnetime) {
   uint64_t prop = 0;
-  prop |= (id & 0xFF);                      // bit 0-7: id
-  prop |= ((uint64_t(parent) & 0xFF) << 8); // bit 8-15: parent
+  prop |= (id & 0xFF);                          // bit 0-7: id
+  prop |= ((uint64_t(parent) & 0xFF) << 8);     // bit 8-15: parent
   if (isQuote)
-    prop |= (1ULL << 32); // bit 32: isQuote
+    prop |= (1ULL << 17);                       // bit 17: isQuote
   if (isOnetime)
-    prop |= (1ULL << 33);                   // bit 33: isOnetime
-  prop |= ((uint64_t(scene) & 0x0F) << 36); // bit 36-39: scene
+    prop |= (1ULL << 18);                       // bit 18: isOnetime
+  prop |= ((uint64_t(scene) & 0x0F) << 20);     // bit 20-23: scene
   return prop;
 }
 
@@ -681,7 +632,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         // Objective段を選択中なら VerbのID を親に、そうでなければ現在の
         // gParent を親にする
         if (isObjectiveSelected && !displayList.empty()) {
-          gInsertParent = displayList[selectedIndex].prop & 0xFF;
+          gInsertParent = getPropID(displayList[selectedIndex].prop);
         } else {
           gInsertParent = gParent;
         }
@@ -836,9 +787,8 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
   std::ofstream ofs("../dd.txt");
   if (ofs.is_open()) {
     for (auto item : containerA) {
-      if (item.text == "dummy") {
-      } else {
-        item.prop &= ~(1ULL << 34);
+      if (item.text != "dummy") {
+        item.prop &= ~(1ULL << 16); // clear hasRead (bit 16)
       }
 
       ofs << "'" << item.text << "', '0x" << std::hex << std::setw(16)
