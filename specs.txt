@@ -729,3 +729,78 @@ slotIndexは2bitしか割り当てがないが、各スロットと組み合わ�
 同じフラグを同時に表現することはない。すなわち、slot1にフラグ1, slot2にもフラグ1となることはない。
 縦軸に、slotId0-3, 横軸にslotIndex0-3をとるマトリックスに対して、どのようにフラグ1-8を割り当てるのが、
 もっとも表現できる4つのフラグの組み合わせが多くなるだろうか。
+
+
+main.cpp内にtimerモジュールの実装をしてほしい。
+timerTarget, timerSetterはそれぞれ8bitからなるフラグである。
+
+timerSetter
+ timerId0,1
+
+timerTarget
+ count 4-7
+ timerId 2,3
+ operator 0,1
+
+timerSetterの操作
+まず0-3のgTimerNを用意してほしい。
+sendProperty()が実行されるたびに、timerIdのtimerNをインクリメントする。
+
+timerTargetの操作
+timerTargetを使ってcond5を実装する。
+timerIdのtimerを確認する。
+operatorは0b10はmore, 0b01はless, 0b11はequalで解釈する。
+例1 timerTarget = 0xa3なら、cond5 = timer0 == 10
+例2 timerTarget = 0xa6なら、cond5 = timer1 > 10
+例3 timerTarget = 0xa1なら、cond5 = timer0 < 10
+timerSetterとともに、timerをインクリメントするのがいいと思う。
+そうしたら、0でないtimerをインクリメントすればいいから、わかりやすいと思う。
+すなわち、timerTarget = 0x13なら、cond5 = timer0 == 1であるから、
+timerをセットした直後だけ有効にtrueになる。
+明らかに0x21でもcond5 = timer0 < 2だから、timerをセットした直後だけtrueになる。
+そして、cond5 == trueなら、参照したtimerN = 0;にして初期化する。
+
+main.cppの現在の仕様を確認してほしいんだけど、たとえばpropの24-63がすべて0のとき、reqFlag = 0, child = 0, newRoot = 0, timerTarget = timer0 invalidOperator 0として解釈されちゃうのかな。
+slotIndex 0なら空要素ということにして、処理をすっとばす設計にしたほうがいいかな。
+いちおう4つのスロットと、4つのIndexで4*4=16のマトリックスになってるんだけど、0b0は有効化フラグをかねてもいいかも。
+すなわち、Indexはすべて+1にして、
+  slot3 56-63 (0:有効化フラグ,1:timerTarget,2:newScene,3:)
+  slot2 48-55 (0:有効化フラグ,1:newRoot,2:unlocks,3:)
+  slot1 40-47 (0:有効化フラグ,1:child,2:excFlags,3:timerSetter)
+  slot0 32-39 (0:有効化フラグ,1:reqFlags,2:,3: )
+のようになるだろう。
+
+1. cond2の処理の内容を変更してほしい。
+既存の処理はgUnlocks = 0x1111;, reqFlag = 0x11;ならばtrueとなった。
+新しい処理は、reqFlag = 0x11;ならば、同じsceneの0x11のIdのhasReadフラグがtrueかどうか調べるものにしてほしい。
+すなわち、次のような処理である。
+for(const auto& item : ContainerB){
+	if(getId(item) == regFlag){
+	return hasRead(item);
+	}
+}
+
+ただし、既存の処理は、unlocksでグローバルなgUnlocksを操作し、それを確認する汎用的な機能であるから、
+現状のgUnlocksを調べるフラグであるreqFlagsは新たにslot2のIndex2に移動させ、
+別でcond6として実装し、いまは使わないのでコメントアウトしておいてほしい。
+
+2.同様にexcFlagにおいても既存のフラグはgUnlocksを参照するものであるが、これをidと解釈し、
+当該のidがhasReadであった場合にfalseとなるように処理を変更する。
+そして、既存のgUnlocksが立っていた場合にfalseとなる既存の処理はこちらもcond7に移動し、
+いまは使わないので、コメントアウトしておく。
+また、既存のgUnlocksに対するexcFlagはslot3のIndex2に移動する。
+
+3.以上のgUnlocksに対するreqFlag, excFlagとidに対するreqFlagとexcFlagを改めて適切に直感的な名前に命名し直してほしい。
+
+
+いま各timerをインクリメントするのは、sendproperty()実行時であるが、
+これをgParent == gRootのようなタイミングでのみ実行してほしい。
+意図としては、見る->犬->寝ているのようなサイクルを1とカウントし、
+寝ている->(見る、話す、行く)のようにホームに戻ってきたら、次のサイクルになると考える。
+timer自体はこのサイクルをカウントしたいからだ。
+そのように動作するように、変更してほしい。
+
+
+timerは現在、cond5がtrueになったときに、0に戻してストップしているけど、
+timerSetterで、ストップも管理するようにする。
+timerSetterフラグの構成を次のように変更し、actionフラグを確認して1ならストップするように処理を変更してほしい。

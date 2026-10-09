@@ -14,26 +14,11 @@
 struct Element {
   std::string text;
   uint64_t prop;
-  /* former prop bit assignment
-  excFlags	56-63 // if ff, treat newRoot as newScene.
-  reqFlags	48-55
-  unlocks	40-47
-  scene		36-39
-  flagsFormat	35 // If 1 read req/excFlags as Flags, nor as id to check
-  hasRead	34
-  isOnetime	33
-  isQuote	32
-  newRoot	24-31
-  child 	16-23
-  parent	8-15
-  id		0-7
-  */
-
   /* new prop bit assignment
-  slot3 56-63 (0:timerTarget,1:newScene,2:,3:)
-  slot2 48-55 (0:newRoot,1:unlocks,2:,3:)
-  slot1 40-47 (0:child,1:excFlags,2:,3: )
-  slot0 32-39 (0:reqFlags,1:timerSetter,2:,3: )
+  slot3 56-63 (0:timerTarget,1:newScene,2:excludedUnlockFlags,3:)
+  slot2 48-55 (0:newRoot,1:unlocks,2:requiredUnlockFlags,3:)
+  slot1 40-47 (0:child,1:excludedReadId,2:timerSetter,3: )
+  slot0 32-39 (0:requiredReadId,1:,2:,3: )
   slot3Index 30,31
   slot2Index 28,29
   slot1Index 26,27
@@ -45,6 +30,18 @@ struct Element {
   hasRead	16
   parent	8-15
   id		0-7
+
+*/
+/*
+  timerTarget 8bit
+  count 4-7
+  timerId 2,3
+  operator 0,1
+
+  timerSetter 8bit
+  action 4,5 // 01:start, 10:stop, 11:reset
+  vacant 2,3
+  timerId 0,1
   */
 
 };
@@ -57,36 +54,70 @@ inline bool getPropIsQuote(uint64_t prop) { return (prop >> 17) & 0x1; }
 inline bool getPropIsOnetime(uint64_t prop) { return (prop >> 18) & 0x1; }
 inline uint8_t getPropScene(uint64_t prop) { return (prop >> 20) & 0xF; }
 
-// Slot 0: bits 32-39, index: bits 24-25 (0: reqFlags, 1: timerSetter)
-inline uint8_t getPropReqFlags(uint64_t prop) {
+// Slot 0: bits 32-39, index: bits 24-25 (0: requiredReadId)
+// The element with this ID in the current scene must already be read.
+inline uint8_t getPropRequiredReadId(uint64_t prop) {
   return (((prop >> 24) & 0x3) == 0) ? ((prop >> 32) & 0xFF) : 0;
 }
-inline uint8_t getPropTimerSetter(uint64_t prop) {
-  return (((prop >> 24) & 0x3) == 1) ? ((prop >> 32) & 0xFF) : 0;
-}
 
-// Slot 1: bits 40-47, index: bits 26-27 (0: child, 1: excFlags)
+// Slot 1: bits 40-47, index: bits 26-27
+// (0: child, 1: excludedReadId, 2: timerSetter)
 inline uint8_t getPropChild(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 0) ? ((prop >> 40) & 0xFF) : 0;
 }
-inline uint8_t getPropExcFlags(uint64_t prop) {
+// The element with this ID in the current scene must not be read.
+inline uint8_t getPropExcludedReadId(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 1) ? ((prop >> 40) & 0xFF) : 0;
 }
+inline uint8_t getPropTimerSetter(uint64_t prop) {
+  return (((prop >> 26) & 0x3) == 2) ? ((prop >> 40) & 0xFF) : 0;
+}
+inline bool hasPropTimerSetter(uint64_t prop) {
+  return ((prop >> 26) & 0x3) == 2;
+}
+inline uint8_t getPropTimerSetterId(uint64_t prop) {
+  return getPropTimerSetter(prop) & 0x3;
+}
+inline uint8_t getPropTimerSetterAction(uint64_t prop) {
+  return (getPropTimerSetter(prop) >> 4) & 0x3;
+}
 
-// Slot 2: bits 48-55, index: bits 28-29 (0: newRoot, 1: unlocks)
+// Slot 2: bits 48-55, index: bits 28-29
+// (0: newRoot, 1: unlocks, 2: requiredUnlockFlags)
 inline uint8_t getPropNewRoot(uint64_t prop) {
   return (((prop >> 28) & 0x3) == 0) ? ((prop >> 48) & 0xFF) : 0;
 }
 inline uint8_t getPropUnlocks(uint64_t prop) {
   return (((prop >> 28) & 0x3) == 1) ? ((prop >> 48) & 0xFF) : 0;
 }
+inline uint8_t getPropRequiredUnlockFlags(uint64_t prop) {
+  return (((prop >> 28) & 0x3) == 2) ? ((prop >> 48) & 0xFF) : 0;
+}
 
-// Slot 3: bits 56-63, index: bits 30-31 (0: timerTarget, 1: newScene)
+// Slot 3: bits 56-63, index: bits 30-31
+// (0: timerTarget, 1: newScene, 2: excludedUnlockFlags)
+// timerTarget: count (bits 4-7), timerId (bits 2-3), operator (bits 0-1)
+// operator: 0b01: less (<), 0b10: more (>), 0b11: equal (==)
+inline bool hasPropTimerTarget(uint64_t prop) {
+  return (((prop >> 30) & 0x3) == 0) && (((prop >> 56) & 0x3) != 0);
+}
 inline uint8_t getPropTimerTarget(uint64_t prop) {
   return (((prop >> 30) & 0x3) == 0) ? ((prop >> 56) & 0xFF) : 0;
 }
+inline uint8_t getPropTimerTargetOp(uint64_t prop) {
+  return ((prop >> 56) & 0x3);
+}
+inline uint8_t getPropTimerTargetId(uint64_t prop) {
+  return ((prop >> 58) & 0x3);
+}
+inline uint8_t getPropTimerTargetCount(uint64_t prop) {
+  return ((prop >> 60) & 0xF);
+}
 inline uint8_t getPropNewScene(uint64_t prop) {
   return (((prop >> 30) & 0x3) == 1) ? ((prop >> 56) & 0xFF) : 0;
+}
+inline uint8_t getPropExcludedUnlockFlags(uint64_t prop) {
+  return (((prop >> 30) & 0x3) == 2) ? ((prop >> 56) & 0xFF) : 0;
 }
 
 inline uint8_t getSlotIndex(uint64_t prop, uint8_t slot) {
@@ -118,6 +149,100 @@ unsigned gRoot = 0;
 unsigned gParent = 0;
 unsigned gUnlocks = 0;
 
+// タイマー 0-3
+unsigned gTimers[4] = {0, 0, 0, 0};
+unsigned &gTimer0 = gTimers[0];
+unsigned &gTimer1 = gTimers[1];
+unsigned &gTimer2 = gTimers[2];
+unsigned &gTimer3 = gTimers[3];
+bool gTimerRunning[4] = {false, false, false, false};
+uint8_t gPendingTimerActions[4] = {0, 0, 0, 0};
+
+enum TimerAction : uint8_t {
+  TIMER_ACTION_NONE = 0,
+  TIMER_ACTION_START = 1,
+  TIMER_ACTION_STOP = 2,
+  TIMER_ACTION_RESET = 3,
+};
+
+// containerB contains only elements in gScene.  ID 0 means that the
+// corresponding read-state condition is not configured.
+inline bool isReadInCurrentScene(uint8_t id) {
+  for (const auto &item : containerB) {
+    if (getPropID(item.prop) == id) {
+      return getPropHasRead(item.prop);
+    }
+  }
+  return false;
+}
+
+inline bool satisfiesRequiredReadId(uint8_t id) {
+  return id == 0 || isReadInCurrentScene(id);
+}
+
+inline bool satisfiesExcludedReadId(uint8_t id) {
+  return id == 0 || !isReadInCurrentScene(id);
+}
+
+// cond5: timerTarget の条件判定
+inline bool evalCond5(uint64_t prop) {
+  if (!hasPropTimerTarget(prop)) {
+    return true; // timerTarget 未設定なら条件クリア
+  }
+  uint8_t op = getPropTimerTargetOp(prop);
+  uint8_t timerId = getPropTimerTargetId(prop);
+  uint8_t count = getPropTimerTargetCount(prop);
+
+  // Stopped timers never satisfy a timerTarget, even if a stop action kept
+  // their previous non-zero count.
+  if (!gTimerRunning[timerId] || gTimers[timerId] == 0) {
+    return false;
+  }
+
+  if (op == 0b01) { // less (<)
+    return gTimers[timerId] < count;
+  } else if (op == 0b10) { // more (>)
+    return gTimers[timerId] > count;
+  } else if (op == 0b11) { // equal (==)
+    return gTimers[timerId] == count;
+  }
+  return false;
+}
+
+inline void resetTimer(uint8_t timerId) {
+  gTimers[timerId] = 0;
+  gTimerRunning[timerId] = false;
+}
+
+// This function is called only when a dialogue cycle has returned to its
+// root.  timerSetter actions collected during that cycle are applied here.
+// A running timer wraps from 15 to 0 and stops.
+inline void advanceTimers() {
+  for (uint8_t timerId = 0; timerId < 4; ++timerId) {
+    uint8_t action = gPendingTimerActions[timerId];
+
+    if (action == TIMER_ACTION_STOP) {
+      gTimerRunning[timerId] = false;
+    } else if (action == TIMER_ACTION_RESET) {
+      resetTimer(timerId);
+    } else {
+      if (action == TIMER_ACTION_START) {
+        gTimerRunning[timerId] = true;
+      }
+
+      if (gTimerRunning[timerId]) {
+        if (gTimers[timerId] == 15) {
+          resetTimer(timerId);
+        } else {
+          ++gTimers[timerId];
+        }
+      }
+    }
+
+    gPendingTimerActions[timerId] = TIMER_ACTION_NONE;
+  }
+}
+
 void rebuildContainerB();
 void rebuildContainerC();
 void rebuildDisplayList();
@@ -130,15 +255,21 @@ bool hasValidObjective(unsigned verbId) {
 
     unsigned parent = getPropParent(prop);
     bool hasRead = getPropHasRead(prop);
-    unsigned reqFlags = getPropReqFlags(prop);
-    unsigned excFlags = getPropExcFlags(prop);
+    uint8_t requiredReadId = getPropRequiredReadId(prop);
+    uint8_t excludedReadId = getPropExcludedReadId(prop);
 
     bool cond1 = (parent == verbId);
-    bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
+    bool cond2 = satisfiesRequiredReadId(requiredReadId);
     bool cond3 = !hasRead;
-    bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
+    bool cond4 = satisfiesExcludedReadId(excludedReadId);
+    bool cond5 = evalCond5(prop);
+    // bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
+    //              getPropRequiredUnlockFlags(prop);
+    // bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
+    //              (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
+    //                  getPropExcludedUnlockFlags(prop);
 
-    if (cond1 && cond2 && cond3 && cond4) {
+    if (cond1 && cond2 && cond3 && cond4 && cond5) {
       return true;
     }
   }
@@ -152,7 +283,9 @@ void renderConsole() {
   std::cout << "gScene   : " << gScene << "\n"
             << "gRoot    : " << gRoot << "\n"
             << "gParent  : " << gParent << "\n"
-            << "gUnlocks : 0x" << std::hex << gUnlocks << std::dec << "\n\n";
+            << "gUnlocks : 0x" << std::hex << gUnlocks << std::dec << "\n"
+            << "gTimers  : [0]:" << gTimer0 << " [1]:" << gTimer1
+            << " [2]:" << gTimer2 << " [3]:" << gTimer3 << "\n\n";
 
   // 2. コンテナ内部状態のデバッグ表示
   std::cout << "=== [ Containers Status ] ===" << std::endl;
@@ -261,18 +394,28 @@ void rebuildContainerC() {
 
     unsigned parent = getPropParent(prop);
     bool hasRead = getPropHasRead(prop);
-    unsigned reqFlags = getPropReqFlags(prop);
-    unsigned excFlags = getPropExcFlags(prop);
+    uint8_t requiredReadId = getPropRequiredReadId(prop);
+    uint8_t excludedReadId = getPropExcludedReadId(prop);
 
     bool cond1 = (parent == gParent);
-    bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
+    bool cond2 = satisfiesRequiredReadId(requiredReadId);
     bool cond3 = !hasRead;
-    bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
+    bool cond4 = satisfiesExcludedReadId(excludedReadId);
+    bool cond5 = evalCond5(prop);
+    // bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
+    //              getPropRequiredUnlockFlags(prop);
+    // bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
+    //              (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
+    //                  getPropExcludedUnlockFlags(prop);
 
-    if (cond1 && cond2 && cond3 && cond4) {
+    if (cond1 && cond2 && cond3 && cond4 && cond5) {
       containerC.push_back(item);
       // 子にdummyがいたら、最優先で処理される。
       if (item.text == "dummy") {
+        if (hasPropTimerTarget(item.prop)) {
+          uint8_t timerId = getPropTimerTargetId(item.prop);
+          resetTimer(timerId);
+        }
         gParent = getPropID(item.prop);
         rebuildContainerC();
         return;
@@ -345,17 +488,27 @@ void rebuildObjectiveList() {
 
       unsigned parent = getPropParent(prop);
       bool hasRead = getPropHasRead(prop);
-      unsigned reqFlags = getPropReqFlags(prop);
-      unsigned excFlags = getPropExcFlags(prop);
+      uint8_t requiredReadId = getPropRequiredReadId(prop);
+      uint8_t excludedReadId = getPropExcludedReadId(prop);
 
       bool cond1 = (parent == verbId);
-      bool cond2 = ((gUnlocks & reqFlags) == reqFlags);
+      bool cond2 = satisfiesRequiredReadId(requiredReadId);
       bool cond3 = !hasRead;
-      bool cond4 = !((gUnlocks & excFlags) == excFlags) || excFlags == 0;
+      bool cond4 = satisfiesExcludedReadId(excludedReadId);
+      bool cond5 = evalCond5(prop);
+      // bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
+      //              getPropRequiredUnlockFlags(prop);
+      // bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
+      //              (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
+      //                  getPropExcludedUnlockFlags(prop);
 
-      if (cond1 && cond2 && cond3 && cond4) {
+      if (cond1 && cond2 && cond3 && cond4 && cond5) {
         // dummyがいたら、dummyを親にしてやりなおし。
         if (item.text == "dummy") {
+          if (hasPropTimerTarget(item.prop)) {
+            uint8_t timerId = getPropTimerTargetId(item.prop);
+            resetTimer(timerId);
+          }
           verbId = getPropID(item.prop);
           hasDummy = true;
           break;
@@ -402,6 +555,9 @@ void sendProperty() {
     noContentState = false;
     rebuildDisplayList();
     rebuildObjectiveList();
+    if (gParent == gRoot) {
+      advanceTimers();
+    }
     needRedraw = true;
     return;
   }
@@ -442,6 +598,21 @@ void sendProperty() {
   unsigned newScene = getPropNewScene(prop);
   bool isOnetime = getPropIsOnetime(prop);
   unsigned unlocks = getPropUnlocks(prop);
+  bool hasTimerSetter = hasPropTimerSetter(prop);
+  uint8_t timerSetterId = getPropTimerSetterId(prop);
+  uint8_t timerSetterAction = getPropTimerSetterAction(prop);
+  if (hasTimerSetter && timerSetterAction != TIMER_ACTION_NONE) {
+    gPendingTimerActions[timerSetterId] = timerSetterAction;
+  }
+
+  // Remember the condition that made the selected element sendable.  A
+  // successful timerTarget is one-shot and consumes its timer.
+  bool consumesTimerTarget = hasPropTimerTarget(prop) && evalCond5(prop);
+  uint8_t timerTargetId = getPropTimerTargetId(prop);
+
+  if (consumesTimerTarget) {
+    resetTimer(timerTargetId);
+  }
 
   if (child) {
     for (const auto &item : containerB) {
@@ -489,6 +660,11 @@ void sendProperty() {
   }
 
   processContainerLifecycle();
+  // A timer counts completed dialogue cycles, not individual selections in a
+  // verb/objective chain.  Advance only after returning to the current root.
+  if (gParent == gRoot) {
+    advanceTimers();
+  }
   needRedraw = true;
 }
 
