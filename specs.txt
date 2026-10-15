@@ -801,6 +801,30 @@ timer自体はこのサイクルをカウントしたいからだ。
 そのように動作するように、変更してほしい。
 
 
-timerは現在、cond5がtrueになったときに、0に戻してストップしているけど、
+timerは現在、cond5がtrueになったときに、0に戻してリセットしているけど、
 timerSetterで、ストップも管理するようにする。
-timerSetterフラグの構成を次のように変更し、actionフラグを確認して1ならストップするように処理を変更してほしい。
+timerSetterフラグの構成を次のように変更し、actionフラグを確認してstart, stop, resetを処理するように変更してほしい。
+
+main.cppに関して。いま、以下のようになってるbit assignmentに対して、
+  /* prop bit assignment
+  slot3 56-63 (0:timerTarget,1:newScene,2:excludedUnlockFlags,3:)
+  slot2 48-55 (0:newRoot,1:unlocks,2:requiredUnlockFlags,3:)
+  slot1 40-47 (0:child,1:excludedReadId,2:timerSetter,3: )
+  slot0 32-39 (0:requiredReadId,1:,2:,3: )
+  slot3Index 30,31
+  slot2Index 28,29
+  slot1Index 26,27
+  slot0Index 24,25
+  scene		20-23
+  vacant	19
+  isOnetime	18
+  isQuote	17
+  hasRead	16
+  parent	8-15
+  id		0-7
+
+
+特に、slot1, 2のIndex2とIndex0を入れ替え、以下のように仕様を変更する。
+これに伴って、インライン関数を主とするプログラムをを新しい仕様に更新してほしい。
+  slot2 48-55 (0:timerSetter,1:unlocks,2:requiredUnlockFlags,3:)
+  slot1 40-47 (0:child,1:excludedReadId,2:newRoot,3: )

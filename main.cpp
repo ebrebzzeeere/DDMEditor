@@ -1,3 +1,11 @@
+/*
+* 本当のことをいうと、rootにもどってきたとき、rootの選択肢は全部持っていて、
+* onetimeQuoteがあったとき、onetimeQuoteを優先して配信する。
+* その後、onetimeQuoteがなくなるまで、loopを回す。
+* でも、特別なループは用意しないほうがいいと思う。
+*
+* あと、rootのとき、あたりまえだけど他のonetimeQuoteと競合するとtimerで有効になってるものは当たり前だけど普通に配信されない。
+*/
 #include <SDL3/SDL_keycode.h>
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
@@ -14,10 +22,10 @@
 struct Element {
   std::string text;
   uint64_t prop;
-  /* new prop bit assignment
+  /* prop bit assignment
   slot3 56-63 (0:timerTarget,1:newScene,2:excludedUnlockFlags,3:)
-  slot2 48-55 (0:newRoot,1:unlocks,2:requiredUnlockFlags,3:)
-  slot1 40-47 (0:child,1:excludedReadId,2:timerSetter,3: )
+  slot2 48-55 (0:timerSetter,1:unlocks,2:requiredUnlockFlags,3:)
+  slot1 40-47 (0:child,1:excludedReadId,2:newRoot,3: )
   slot0 32-39 (0:requiredReadId,1:,2:,3: )
   slot3Index 30,31
   slot2Index 28,29
@@ -61,7 +69,7 @@ inline uint8_t getPropRequiredReadId(uint64_t prop) {
 }
 
 // Slot 1: bits 40-47, index: bits 26-27
-// (0: child, 1: excludedReadId, 2: timerSetter)
+// (0: child, 1: excludedReadId, 2: newRoot)
 inline uint8_t getPropChild(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 0) ? ((prop >> 40) & 0xFF) : 0;
 }
@@ -69,23 +77,23 @@ inline uint8_t getPropChild(uint64_t prop) {
 inline uint8_t getPropExcludedReadId(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 1) ? ((prop >> 40) & 0xFF) : 0;
 }
-inline uint8_t getPropTimerSetter(uint64_t prop) {
+inline uint8_t getPropNewRoot(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 2) ? ((prop >> 40) & 0xFF) : 0;
 }
+
+// Slot 2: bits 48-55, index: bits 28-29
+// (0: timerSetter, 1: unlocks, 2: requiredUnlockFlags)
+inline uint8_t getPropTimerSetter(uint64_t prop) {
+  return (((prop >> 28) & 0x3) == 0) ? ((prop >> 48) & 0xFF) : 0;
+}
 inline bool hasPropTimerSetter(uint64_t prop) {
-  return ((prop >> 26) & 0x3) == 2;
+  return (((prop >> 28) & 0x3) == 0) && (((prop >> 52) & 0x3) != 0);
 }
 inline uint8_t getPropTimerSetterId(uint64_t prop) {
   return getPropTimerSetter(prop) & 0x3;
 }
 inline uint8_t getPropTimerSetterAction(uint64_t prop) {
   return (getPropTimerSetter(prop) >> 4) & 0x3;
-}
-
-// Slot 2: bits 48-55, index: bits 28-29
-// (0: newRoot, 1: unlocks, 2: requiredUnlockFlags)
-inline uint8_t getPropNewRoot(uint64_t prop) {
-  return (((prop >> 28) & 0x3) == 0) ? ((prop >> 48) & 0xFF) : 0;
 }
 inline uint8_t getPropUnlocks(uint64_t prop) {
   return (((prop >> 28) & 0x3) == 1) ? ((prop >> 48) & 0xFF) : 0;
