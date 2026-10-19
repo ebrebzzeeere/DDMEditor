@@ -25,10 +25,10 @@ add_executable(DDMEditor ${LIB_SOURCE})
 find_package(SDL3 REQUIRED)
 add_library(FinalSTATIC STATIC IMPORTED)
 set_target_properties(FinalSTATIC PROPERTIES
-	IMPORTED_LOCATION "/home/genios/Projects/NEELA/Final/build/Final.a"
+	IMPORTED_LOCATION "/home/herb1s/Projects/NEELA/Final/build/Final.a"
 )
 target_include_directories(DDMEditor PRIVATE
-	"/home/genios/Projects/NEELA/Final/include"
+	"/home/herb1s/Projects/NEELA/Final/include"
 )
 target_link_libraries(DDMEditor PRIVATE FinalSTATIC)
 target_link_libraries(DDMEditor PRIVATE SDL3::SDL3)

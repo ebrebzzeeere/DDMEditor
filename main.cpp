@@ -1,11 +1,11 @@
 /*
-* 本当のことをいうと、rootにもどってきたとき、rootの選択肢は全部持っていて、
-* onetimeQuoteがあったとき、onetimeQuoteを優先して配信する。
-* その後、onetimeQuoteがなくなるまで、loopを回す。
-* でも、特別なループは用意しないほうがいいと思う。
-*
-* あと、rootのとき、あたりまえだけど他のonetimeQuoteと競合するとtimerで有効になってるものは当たり前だけど普通に配信されない。
-*/
+ * 本当のことをいうと、rootにもどってきたとき、rootの選択肢は全部持っていて、
+ * onetimeQuoteがあったとき、onetimeQuoteを優先して配信する。
+ * その後、onetimeQuoteがなくなるまで、loopを回す。
+ * でも、特別なループは用意しないほうがいいと思う。
+ *
+ * あと、rootのとき、あたりまえだけど他のonetimeQuoteと競合するとtimerで有効になってるものは当たり前だけど普通に配信されない。
+ */
 #include <SDL3/SDL_keycode.h>
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
@@ -23,10 +23,10 @@ struct Element {
   std::string text;
   uint64_t prop;
   /* prop bit assignment
-  slot3 56-63 (0:timerTarget,1:newScene,2:excludedUnlockFlags,3:)
-  slot2 48-55 (0:timerSetter,1:unlocks,2:requiredUnlockFlags,3:)
-  slot1 40-47 (0:child,1:excludedReadId,2:newRoot,3: )
-  slot0 32-39 (0:requiredReadId,1:,2:,3: )
+  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags, 3:eyelevelToggle)
+  slot2 48-55 (0:timerSetter,	 1:unlocks,	   2:requiredUnlockFlags, 3:)
+  slot1 40-47 (0:child,		 1:excludedReadId, 2:newRoot,		  3: )
+  slot0 32-39 (0:requiredReadId, 1:unlocks,	   2:,			  3: )
   slot3Index 30,31
   slot2Index 28,29
   slot1Index 26,27
@@ -40,21 +40,25 @@ struct Element {
   id		0-7
 
 */
-/*
-  timerTarget 8bit
-  count 4-7
-  timerId 2,3
-  operator 0,1
+  /*
+    timerTarget 8bit
+    count 4-7
+    timerId 2,3
+    operator 0,1
 
-  timerSetter 8bit
-  action 4,5 // 01:start, 10:stop, 11:reset
-  vacant 2,3
-  timerId 0,1
-  */
+    timerSetter 8bit
+    action 4,5 // 01:start, 10:stop, 11:reset
+    vacant 2,3
+    timerId 0,1
 
+    eyelevelToggle 8bit
+    toggleEyelevel 4-7 // eyelevelの変更先
+    eyelevel 0-3       // 自身のeyelevel
+    */
 };
 
-// --- ヘルパー関数: プロパティのフィールド抽出 (new prop bit assignment準拠) ---
+// --- ヘルパー関数: プロパティのフィールド抽出 (new prop bit assignment準拠)
+// ---
 inline uint8_t getPropID(uint64_t prop) { return prop & 0xFF; }
 inline uint8_t getPropParent(uint64_t prop) { return (prop >> 8) & 0xFF; }
 inline bool getPropHasRead(uint64_t prop) { return (prop >> 16) & 0x1; }
@@ -62,10 +66,14 @@ inline bool getPropIsQuote(uint64_t prop) { return (prop >> 17) & 0x1; }
 inline bool getPropIsOnetime(uint64_t prop) { return (prop >> 18) & 0x1; }
 inline uint8_t getPropScene(uint64_t prop) { return (prop >> 20) & 0xF; }
 
-// Slot 0: bits 32-39, index: bits 24-25 (0: requiredReadId)
+// Slot 0: bits 32-39, index: bits 24-25
+// (0: requiredReadId, 1: unlocks)
 // The element with this ID in the current scene must already be read.
 inline uint8_t getPropRequiredReadId(uint64_t prop) {
   return (((prop >> 24) & 0x3) == 0) ? ((prop >> 32) & 0xFF) : 0;
+}
+inline uint8_t getPropSlot0Unlocks(uint64_t prop) {
+  return (((prop >> 24) & 0x3) == 1) ? ((prop >> 32) & 0xFF) : 0;
 }
 
 // Slot 1: bits 40-47, index: bits 26-27
@@ -95,8 +103,11 @@ inline uint8_t getPropTimerSetterId(uint64_t prop) {
 inline uint8_t getPropTimerSetterAction(uint64_t prop) {
   return (getPropTimerSetter(prop) >> 4) & 0x3;
 }
-inline uint8_t getPropUnlocks(uint64_t prop) {
+inline uint8_t getPropSlot2Unlocks(uint64_t prop) {
   return (((prop >> 28) & 0x3) == 1) ? ((prop >> 48) & 0xFF) : 0;
+}
+inline uint8_t getPropUnlocks(uint64_t prop) {
+  return getPropSlot0Unlocks(prop) | getPropSlot2Unlocks(prop);
 }
 inline uint8_t getPropRequiredUnlockFlags(uint64_t prop) {
   return (((prop >> 28) & 0x3) == 2) ? ((prop >> 48) & 0xFF) : 0;
@@ -127,6 +138,12 @@ inline uint8_t getPropNewScene(uint64_t prop) {
 inline uint8_t getPropExcludedUnlockFlags(uint64_t prop) {
   return (((prop >> 30) & 0x3) == 2) ? ((prop >> 56) & 0xFF) : 0;
 }
+inline uint8_t getPropEyelevel(uint64_t prop) {
+  return (((prop >> 30) & 0x3) == 3) ? ((prop >> 56) & 0x0F) : 0;
+}
+inline uint8_t getPropToggleEyelevel(uint64_t prop) {
+  return (((prop >> 30) & 0x3) == 3) ? ((prop >> 60) & 0x0F) : 0;
+}
 
 inline uint8_t getSlotIndex(uint64_t prop, uint8_t slot) {
   return (prop >> (24 + slot * 2)) & 0x3;
@@ -156,6 +173,7 @@ unsigned gScene = 3;
 unsigned gRoot = 0;
 unsigned gParent = 0;
 unsigned gUnlocks = 0;
+unsigned gEyelevel = 0;
 
 // タイマー 0-3
 unsigned gTimers[4] = {0, 0, 0, 0};
@@ -265,19 +283,21 @@ bool hasValidObjective(unsigned verbId) {
     bool hasRead = getPropHasRead(prop);
     uint8_t requiredReadId = getPropRequiredReadId(prop);
     uint8_t excludedReadId = getPropExcludedReadId(prop);
+    uint8_t eyelevel = getPropEyelevel(prop);
 
     bool cond1 = (parent == verbId);
     bool cond2 = satisfiesRequiredReadId(requiredReadId);
     bool cond3 = !hasRead;
     bool cond4 = satisfiesExcludedReadId(excludedReadId);
     bool cond5 = evalCond5(prop);
-    // bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
-    //              getPropRequiredUnlockFlags(prop);
-    // bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
-    //              (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
-    //                  getPropExcludedUnlockFlags(prop);
+    bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
+                 getPropRequiredUnlockFlags(prop);
+    bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
+                 (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
+                     getPropExcludedUnlockFlags(prop);
+    bool cond8 = (gEyelevel == eyelevel) || (eyelevel == 0x0);
 
-    if (cond1 && cond2 && cond3 && cond4 && cond5) {
+    if (cond1 && cond2 && cond3 && cond4 && cond5 && cond6 && cond7 && cond8) {
       return true;
     }
   }
@@ -292,6 +312,7 @@ void renderConsole() {
             << "gRoot    : " << gRoot << "\n"
             << "gParent  : " << gParent << "\n"
             << "gUnlocks : 0x" << std::hex << gUnlocks << std::dec << "\n"
+            << "gEyelevel: 0x" << std::hex << gEyelevel << std::dec << "\n"
             << "gTimers  : [0]:" << gTimer0 << " [1]:" << gTimer1
             << " [2]:" << gTimer2 << " [3]:" << gTimer3 << "\n\n";
 
@@ -404,19 +425,21 @@ void rebuildContainerC() {
     bool hasRead = getPropHasRead(prop);
     uint8_t requiredReadId = getPropRequiredReadId(prop);
     uint8_t excludedReadId = getPropExcludedReadId(prop);
+    uint8_t eyelevel = getPropEyelevel(prop);
 
     bool cond1 = (parent == gParent);
     bool cond2 = satisfiesRequiredReadId(requiredReadId);
     bool cond3 = !hasRead;
     bool cond4 = satisfiesExcludedReadId(excludedReadId);
     bool cond5 = evalCond5(prop);
-    // bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
-    //              getPropRequiredUnlockFlags(prop);
-    // bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
-    //              (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
-    //                  getPropExcludedUnlockFlags(prop);
+    bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
+                 getPropRequiredUnlockFlags(prop);
+    bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
+                 (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
+                     getPropExcludedUnlockFlags(prop);
+    bool cond8 = (gEyelevel == eyelevel) || (eyelevel == 0x0);
 
-    if (cond1 && cond2 && cond3 && cond4 && cond5) {
+    if (cond1 && cond2 && cond3 && cond4 && cond5 && cond6 && cond7 && cond8) {
       containerC.push_back(item);
       // 子にdummyがいたら、最優先で処理される。
       if (item.text == "dummy") {
@@ -498,19 +521,21 @@ void rebuildObjectiveList() {
       bool hasRead = getPropHasRead(prop);
       uint8_t requiredReadId = getPropRequiredReadId(prop);
       uint8_t excludedReadId = getPropExcludedReadId(prop);
+      uint8_t eyelevel = getPropEyelevel(prop);
 
       bool cond1 = (parent == verbId);
       bool cond2 = satisfiesRequiredReadId(requiredReadId);
       bool cond3 = !hasRead;
       bool cond4 = satisfiesExcludedReadId(excludedReadId);
       bool cond5 = evalCond5(prop);
-      // bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
-      //              getPropRequiredUnlockFlags(prop);
-      // bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
-      //              (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
-      //                  getPropExcludedUnlockFlags(prop);
+      bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
+                   getPropRequiredUnlockFlags(prop);
+      bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
+                   (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
+                       getPropExcludedUnlockFlags(prop);
+      bool cond8 = (gEyelevel == eyelevel) || (eyelevel == 0x0);
 
-      if (cond1 && cond2 && cond3 && cond4 && cond5) {
+      if (cond1 && cond2 && cond3 && cond4 && cond5 && cond6 && cond7 && cond8) {
         // dummyがいたら、dummyを親にしてやりなおし。
         if (item.text == "dummy") {
           if (hasPropTimerTarget(item.prop)) {
@@ -556,6 +581,7 @@ void sendProperty() {
         gRoot = 0;
         gParent = 0;
         gUnlocks = 0;
+        gEyelevel = 0;
         rebuildContainerC();
       }
     }
@@ -605,7 +631,9 @@ void sendProperty() {
   unsigned newRoot = getPropNewRoot(prop);
   unsigned newScene = getPropNewScene(prop);
   bool isOnetime = getPropIsOnetime(prop);
-  unsigned unlocks = getPropUnlocks(prop);
+  unsigned unlocks0 = getPropSlot0Unlocks(prop);
+  unsigned unlocks2 = getPropSlot2Unlocks(prop);
+  uint8_t toggleEyelevel = getPropToggleEyelevel(prop);
   bool hasTimerSetter = hasPropTimerSetter(prop);
   uint8_t timerSetterId = getPropTimerSetterId(prop);
   uint8_t timerSetterAction = getPropTimerSetterAction(prop);
@@ -658,12 +686,18 @@ void sendProperty() {
     gRoot = 0;
     gParent = 0;
     gUnlocks = 0;
+    gEyelevel = 0;
   } else {
-    gUnlocks |= unlocks;
+    gUnlocks |= unlocks0 | unlocks2;
+
+    if (toggleEyelevel != 0x0) {
+      gEyelevel = toggleEyelevel;
+    }
 
     if (newRoot != 0) {
       gRoot = newRoot;
       gUnlocks = 0x0; // リセットする。
+      gEyelevel = 0;
     }
   }
 
@@ -695,13 +729,13 @@ unsigned gInsertParent = 0;
 uint64_t buildProperty(unsigned id, unsigned parent, unsigned scene,
                        bool isQuote, bool isOnetime) {
   uint64_t prop = 0;
-  prop |= (id & 0xFF);                          // bit 0-7: id
-  prop |= ((uint64_t(parent) & 0xFF) << 8);     // bit 8-15: parent
+  prop |= (id & 0xFF);                      // bit 0-7: id
+  prop |= ((uint64_t(parent) & 0xFF) << 8); // bit 8-15: parent
   if (isQuote)
-    prop |= (1ULL << 17);                       // bit 17: isQuote
+    prop |= (1ULL << 17); // bit 17: isQuote
   if (isOnetime)
-    prop |= (1ULL << 18);                       // bit 18: isOnetime
-  prop |= ((uint64_t(scene) & 0x0F) << 20);     // bit 20-23: scene
+    prop |= (1ULL << 18);                   // bit 18: isOnetime
+  prop |= ((uint64_t(scene) & 0x0F) << 20); // bit 20-23: scene
   return prop;
 }
 

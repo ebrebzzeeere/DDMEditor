@@ -805,26 +805,125 @@ timerは現在、cond5がtrueになったときに、0に戻してリセット�
 timerSetterで、ストップも管理するようにする。
 timerSetterフラグの構成を次のように変更し、actionフラグを確認してstart, stop, resetを処理するように変更してほしい。
 
-main.cppに関して。いま、以下のようになってるbit assignmentに対して、
-  /* prop bit assignment
-  slot3 56-63 (0:timerTarget,1:newScene,2:excludedUnlockFlags,3:)
-  slot2 48-55 (0:newRoot,1:unlocks,2:requiredUnlockFlags,3:)
-  slot1 40-47 (0:child,1:excludedReadId,2:timerSetter,3: )
-  slot0 32-39 (0:requiredReadId,1:,2:,3: )
-  slot3Index 30,31
-  slot2Index 28,29
-  slot1Index 26,27
-  slot0Index 24,25
-  scene		20-23
-  vacant	19
-  isOnetime	18
-  isQuote	17
-  hasRead	16
-  parent	8-15
-  id		0-7
 
 
-特に、slot1, 2のIndex2とIndex0を入れ替え、以下のように仕様を変更する。
-これに伴って、インライン関数を主とするプログラムをを新しい仕様に更新してほしい。
-  slot2 48-55 (0:timerSetter,1:unlocks,2:requiredUnlockFlags,3:)
-  slot1 40-47 (0:child,1:excludedReadId,2:newRoot,3: )
+## 1. 目的（Goal & Context）
+- 何を達成したいのか（Why & What）
+- 関連するIssue/要件
+main.cpp内において、tickモジュールを追加したい。しかし、すでにpropはすでに64bit使い切っている。
+いまは、gScene空間内のElementをgRootを基準として、ノードを形成し様々なコンストレイントで
+ノードを成形している。これにさらに次元を一つ加える形で、prop bit assignment内にtickモジュールを追加する。
+すなわち、tick == 1ならば、gTick == 1でなければ配信できないようにする。
+これは機能的には非常にUnlocksのフラグシステムに極めて類似するものである。
+特定のフラグによって、Unlocksを進行させ、それを参照してブール演算を行う。
+つまり、あるひとつのElementが分水嶺となって、全体のフラグをトグルするからだ。
+ここで思うことは、newSceneやnewRootのような機能は、
+本質的にはデータ空間を隔てる行為であるので、本質的に同等とみなせるであろう。
+しかし、物語自体のイメージとしてscene1で展開されているというようなユーザーフレンドリーな直感を助ける機能であり、同時に親切な機能でしかない。
+さて、本質的な問題はtickモジュールと追加しようとする時果たして、どのモジュールと統合できるだろうか。
+またそのときにbit assignmentはどのようになるだろうか。
+とくに、現在は最大でscene4bit * id 8bit分のElementが一つのファイルで表現できる。最大データ数はどのように変化するだろうか。
+
+
+## 2. スコープと対象（Target Scope）
+- 対象ファイル/ディレクトリ: `pwd*`
+- 触ってはいけない領域: `pwdの外`（）
+
+## 3. 制約条件（Constraints / Negative Prompting）
+- Elementの構成を変えることはしない。つまり、prop2は設けない。
+- 64bitのなかに、必要な機能をすべて盛り込む。
+## 4. 完了条件（Definition of Done / DoD）
+- [ ] tickモジュール自体の性質と、他のモジュールの形成するconstraintが説明され、
+取捨選択及び統合のトレードオフが説明されていること。
+
+トグルという表現が、不適切だった。
+gTickはgTick += 1のようにどんどんインクリメントする。tickフラグは4bitのフラグとして、最大15のフラグとしたい。
+
+
+おおむね、propはsceneを頂点して、verb, optionの連なる構造をしている。
+この構造の頂点をrootとして、rootを変更する、
+
+## 1. 目的（Goal & Context）
+- 何を達成したいのか（Why & What）
+- 関連するIssue/要件
+
+## 2. スコープと対象（Target Scope）
+- 対象ファイル/ディレクトリ: `src/auth/*`
+- 触ってはいけない領域: `src/database/schema.prisma`（DBスキーマは変更不可）
+
+## 3. 制約条件（Constraints / Negative Prompting）
+- 既存の公開インターフェース（API）を破壊しないこと
+- 新たな外部依存ライブラリを追加しないこと
+- `any` 型を許可しないこと（TypeScriptの場合）
+
+## 4. 完了条件（Definition of Done / DoD）
+- [ ] `npm run test:auth` がGreenになること
+- [ ] `npm run lint` をパスすること
+- [ ] 境界値（Token期限切れ時）のユニットテストが追加されていること
+
+## 5. 次の最初のアクション（First Step）
+- コードはまだ書かず、まず関連箇所のコードを調査し、変更計画（Plan）を箇条書きで提示してください。
+
+## 1. 目的（Goal & Context）
+- 何を達成したいのか（Why & What）
+- 関連するIssue/要件
+main.cppにあるプログラムは64bitのpropをdd.txtから取得し、
+各種のフラグを参照して、送信されたプロパティを処理してデータセットを構成している。
+フラグには様々なものがあり、それぞれの処理が詳細である一方で、
+sceneやrootなど頂点のノードを変更する、Unlocksは一括でhasReadを立てる処理というように、
+和と積の関係のように本質的には量的な違いといえるものもある。
+この複雑化したシステムを業務上の引き継ぎのため、このように抽象的に捉えて説明し直してほしい。
+
+## 2. スコープと対象（Target Scope）
+- main.cppとdd.txtだけ読んで良い。
+## 3. 制約条件（Constraints / Negative Prompting）
+- 2に準ずる。
+## 4. 完了条件（Definition of Done / DoD）
+- [  ] 特にprop bit assignmentがどのような機能を果たし、
+Element全体がどのようなデータ構造を構成し、それがどのように変化するのか。
+そして、変化するデータ構造は全体としてどのような空間に閉じているのか簡潔に本質が説明されていること。
+
+
+
+## 1. 目的（Goal & Context）
+- main.cppのprop bit assignmentを編集する。それに伴って、インライン関数の整備と呼び出しを更新する必要がある。
+特に、slot0-1にunlocksを追加する。すなわち、slot2-1が占有されているときは、slot0-1にunlocksを置くことが出来るように変更したい。
+ただし、slot0-1, slot2-1の両方にunlocksが置かれている場合、処理は競合してもよい。e.g. gUnlocks |= unlocks1 | unlocks2;
+
+## 2. スコープと対象（Target Scope）
+- main.cppのみ編集してよい。
+
+## 3. 制約条件（Constraints / Negative Prompting）
+- 2に準ずる。
+
+## 4. 完了条件（Definition of Done / DoD）
+- [  ] 具体的に必要な変更の内容がもれなく列挙され、具体的なコードが提示されていること。
+
+## 5. 次の最初のアクション（First Step）
+- コードはまだ書かず、まず関連箇所のコードを調査し、変更計画（Plan）を箇条書きで提示してください。
+
+## 1. 目的（Goal & Context）
+- eye level toggle モジュールを実装する。gUnlocksが不可逆的な束なのに対して、gEyelevel &= eyelevel;のように特定の状態にトグルされる束である。
+イメージとして、椅子に座ったときに目に入る選択肢、また着席時に狭くなる視界の状態を表現する。eyelevelフラグはひとまずslot3-3に置く。
+bit assignmentは下のようになっている。
+slot3-3 - 8bit
+toggleEyelevel 4-7 // eyelevelの変更先。
+eyelevel 0-3 // 自身のeyelevel.
+
+このフラグはgEyelevel &= toggleEyelevel; cond8 = gEyelevel == eyelevel;のように扱う。
+ただし、toggleEyelevel == 0x0;ならば、gEyelevel = gEyelevel; eyelevel == 0x0;なら、cond8 = true;すなわち、cond8 = (gEyelevel == eyelevel) || (eyelevel == 0x0);
+
+## 2. スコープと対象（Target Scope）
+- main.cppのみ編集してよい。
+
+## 3. 制約条件（Constraints / Negative Prompting）
+- 2に準ずる。
+
+## 4. 完了条件（Definition of Done / DoD）
+- [  ] 具体的に必要な変更の内容がもれなく列挙され、具体的なコードが提示されていること。
+提示されたコードを承認したうえで、main.cppの編集に移るので、許可があるまでmain.cppを編集してはいけない。
+
+
+1. gEyelevel = toggleEyelevel;とする。
+2.newRoot != 0のとき、gUnlocks同様、gEyelevel = 0;とする。
+上述の仕様にてコードを編集して下さい。
