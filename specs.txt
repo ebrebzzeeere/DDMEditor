@@ -927,3 +927,19 @@ eyelevel 0-3 // 自身のeyelevel.
 1. gEyelevel = toggleEyelevel;とする。
 2.newRoot != 0のとき、gUnlocks同様、gEyelevel = 0;とする。
 上述の仕様にてコードを編集して下さい。
+
+## 1. 目的（Goal & Context）
+- dd.txtにミスがあると不正な書式で、dd.txtの書き換えを行い、既存のデータを破棄してしまうおそれがあるから、
+バックアップモジュールを追加する。
+終了時にdd.txtに書き込む前に、dd.txtをdd.txt.bakにコピーする処理を追加してほしい。
+すなわち、./DDMEditor実行後は、dd.txtに直前の実行内容が、dd.txt.bakに直前の実行前の内容が保存され、
+万が一実行中に意図せぬエラーがあってもdd.txt.bakから復元することを意図したものである。
+
+## 2. スコープと対象（Target Scope）
+- main.cppのみ編集してよい。
+
+## 3. 制約条件（Constraints / Negative Prompting）
+- 2に準ずる。
+
+## 4. 完了条件（Definition of Done / DoD）
+- [  ] 動作の結果、SDL_AppQuit()実行時にdd.txtの書き込み前に、dd.txtがdd.txt.bakにコピーされていること。

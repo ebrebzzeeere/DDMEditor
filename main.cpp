@@ -12,6 +12,7 @@
 #include <SDL3/SDL_main.h>
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -173,7 +174,7 @@ unsigned gScene = 3;
 unsigned gRoot = 0;
 unsigned gParent = 0;
 unsigned gUnlocks = 0;
-unsigned gEyelevel = 0;
+unsigned gEyelevel = 1;
 
 // タイマー 0-3
 unsigned gTimers[4] = {0, 0, 0, 0};
@@ -1000,8 +1001,24 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   return SDL_APP_CONTINUE;
 }
 
+// バックアップモジュール
+void backupData(const std::string &srcPath = "../dd.txt",
+                const std::string &dstPath = "../dd.txt.bak") {
+  std::error_code ec;
+  if (std::filesystem::exists(srcPath, ec)) {
+    std::filesystem::copy_file(srcPath, dstPath,
+                               std::filesystem::copy_options::overwrite_existing,
+                               ec);
+    if (ec) {
+      std::cerr << "バックアップの作成に失敗しました: " << ec.message() << std::endl;
+    }
+  }
+}
+
 // SDL_AppQuit
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+  backupData("../dd.txt", "../dd.txt.bak");
+
   std::ofstream ofs("../dd.txt");
   if (ofs.is_open()) {
     for (auto item : containerA) {
