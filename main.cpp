@@ -590,9 +590,9 @@ void sendProperty() {
     noContentState = false;
     rebuildDisplayList();
     rebuildObjectiveList();
-    if (gParent == gRoot) {
-      advanceTimers();
-    }
+    //if (gParent == gRoot) {
+    //  advanceTimers();
+    //}
     needRedraw = true;
     return;
   }
@@ -642,14 +642,14 @@ void sendProperty() {
     gPendingTimerActions[timerSetterId] = timerSetterAction;
   }
 
-  // Remember the condition that made the selected element sendable.  A
-  // successful timerTarget is one-shot and consumes its timer.
-  bool consumesTimerTarget = hasPropTimerTarget(prop) && evalCond5(prop);
-  uint8_t timerTargetId = getPropTimerTargetId(prop);
+  //// Remember the condition that made the selected element sendable.  A
+  //// successful timerTarget is one-shot and consumes its timer.
+  //bool consumesTimerTarget = hasPropTimerTarget(prop) && evalCond5(prop);
+  //uint8_t timerTargetId = getPropTimerTargetId(prop);
 
-  if (consumesTimerTarget) {
-    resetTimer(timerTargetId);
-  }
+  //if (consumesTimerTarget) {
+  //  resetTimer(timerTargetId);
+  //}
 
   if (child) {
     for (const auto &item : containerB) {
@@ -705,7 +705,7 @@ void sendProperty() {
   processContainerLifecycle();
   // A timer counts completed dialogue cycles, not individual selections in a
   // verb/objective chain.  Advance only after returning to the current root.
-  if (gParent == gRoot) {
+  if (noContentState && parent != gRoot) { // progress timer when verb to quote loop completed.
     advanceTimers();
   }
   needRedraw = true;
