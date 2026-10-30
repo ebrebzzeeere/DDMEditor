@@ -958,3 +958,38 @@ LLMに次のような質問がしたいので、適当なプロンプトを出�
 ランタイムに任意のタイミングで、.cppにブレークポイントを設定して、step overとstep intoを実行したい。
 シェルから実行したときはシェルにstd::coutされるけど、F5でデバッグを開始するとシェルが開かず、デバッグストリングが見れない。
 どのような操作もしくは設定画必要か教えてほしい。
+
+
+gemini 3.8に以下の内容を指示をするプロンプトを書いてほしい。
+
+main.cppのprop bit assignmentの仕様を変更してほしい。
+現在、unlocksはslot0-1, slot2-1の二箇所に設定されている。
+このように現在、slot1-1のみにあるexcludedReadIdをslot2-3にも設定してほしい。
+フラグの読み取りに際しては、それぞれ処理を行い、excludedReadId1, 2のように個別に処理を行う。したがって競合してもよい。
+
+
+## 1. 目的（Goal & Context）
+- main.cppのprop bit assignmentの仕様を変更し、excludedReadIdを最大2つ同時に設定・評価可能にする。
+  - slot1-1: excludedReadId1（既存）
+  - slot2-3: excludedReadId2（新規）
+
+## 2. スコープと対象（Target Scope）
+- main.cpp
+- specs.txt
+
+## 3. 仕様（Specifications）
+- prop bit assignment:
+  slot3 56-63 (0:timerTarget,  1:newScene,        2:excludedUnlockFlags, 3:eyelevelToggle)
+  slot2 48-55 (0:timerSetter,  1:unlocks,        2:requiredUnlockFlags, 3:excludedReadId)
+  slot1 40-47 (0:child,        1:excludedReadId, 2:newRoot,             3: )
+  slot0 32-39 (0:requiredReadId, 1:unlocks,      2:,                    3: )
+- インライン関数:
+  - `getPropSlot1ExcludedReadId(prop)` / `getPropExcludedReadId1(prop)`
+  - `getPropSlot2ExcludedReadId(prop)` / `getPropExcludedReadId2(prop)`
+  - `getPropExcludedReadId(prop)`（互換性のために`getPropExcludedReadId1(prop)`を返す）
+- 条件判定 (cond4):
+  - cond4_1 = satisfiesExcludedReadId(excludedReadId1);
+  - cond4_2 = satisfiesExcludedReadId(excludedReadId2);
+  - cond4 = cond4_1 && cond4_2;
+  - `hasValidObjective`, `rebuildContainerC`, `rebuildObjectiveList` それぞれで独立して評価。
+- `unlocks` の割り当て（slot0-1, slot2-1）は維持。

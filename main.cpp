@@ -24,11 +24,12 @@ struct Element {
   std::string text;
   uint64_t prop;
   /* prop bit assignment
-  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags,
-  3:eyelevelToggle) slot2 48-55 (0:timerSetter,	 1:unlocks,
-  2:requiredUnlockFlags, 3:) slot1 40-47 (0:child,
-  1:excludedReadId, 2:newRoot,		  3: ) slot0 32-39 (0:requiredReadId,
-  1:unlocks,	   2:,			  3: ) slot3Index 30,31 slot2Index 28,29
+  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags,  3:eyelevelToggle)
+  slot2 48-55 (0:timerSetter,	 1:unlocks,	   2:requiredUnlockFlags,  3:excludedReadId)
+  slot1 40-47 (0:child,		 1:excludedReadId, 2:newRoot,		   3: )
+  slot0 32-39 (0:requiredReadId, 1:unlocks,	   2:,			   3: )
+  slot3Index 30,31
+  slot2Index 28,29
   slot1Index 26,27
   slot0Index 24,25
   scene		20-23
@@ -82,15 +83,21 @@ inline uint8_t getPropChild(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 0) ? ((prop >> 40) & 0xFF) : 0;
 }
 // The element with this ID in the current scene must not be read.
-inline uint8_t getPropExcludedReadId(uint64_t prop) {
+inline uint8_t getPropSlot1ExcludedReadId(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 1) ? ((prop >> 40) & 0xFF) : 0;
+}
+inline uint8_t getPropExcludedReadId1(uint64_t prop) {
+  return getPropSlot1ExcludedReadId(prop);
+}
+inline uint8_t getPropExcludedReadId(uint64_t prop) {
+  return getPropExcludedReadId1(prop);
 }
 inline uint8_t getPropNewRoot(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 2) ? ((prop >> 40) & 0xFF) : 0;
 }
 
 // Slot 2: bits 48-55, index: bits 28-29
-// (0: timerSetter, 1: unlocks, 2: requiredUnlockFlags)
+// (0: timerSetter, 1: unlocks, 2: requiredUnlockFlags, 3: excludedReadId)
 inline uint8_t getPropTimerSetter(uint64_t prop) {
   return (((prop >> 28) & 0x3) == 0) ? ((prop >> 48) & 0xFF) : 0;
 }
@@ -111,6 +118,12 @@ inline uint8_t getPropUnlocks(uint64_t prop) {
 }
 inline uint8_t getPropRequiredUnlockFlags(uint64_t prop) {
   return (((prop >> 28) & 0x3) == 2) ? ((prop >> 48) & 0xFF) : 0;
+}
+inline uint8_t getPropSlot2ExcludedReadId(uint64_t prop) {
+  return (((prop >> 28) & 0x3) == 3) ? ((prop >> 48) & 0xFF) : 0;
+}
+inline uint8_t getPropExcludedReadId2(uint64_t prop) {
+  return getPropSlot2ExcludedReadId(prop);
 }
 
 // Slot 3: bits 56-63, index: bits 30-31
@@ -282,7 +295,8 @@ bool hasValidObjective(unsigned verbId) {
     unsigned parent = getPropParent(prop);
     bool hasRead = getPropHasRead(prop);
     uint8_t requiredReadId = getPropRequiredReadId(prop);
-    uint8_t excludedReadId = getPropExcludedReadId(prop);
+    uint8_t excludedReadId1 = getPropExcludedReadId1(prop);
+    uint8_t excludedReadId2 = getPropExcludedReadId2(prop);
     uint8_t eyelevel = getPropEyelevel(prop);
     bool isOnetime = getPropIsOnetime(item.prop);
 
@@ -293,7 +307,9 @@ bool hasValidObjective(unsigned verbId) {
     /*
      * TODO not isOnetimeなら、cond3は常時false。ただし、hasReadフラグは立てる。
      */
-    bool cond4 = satisfiesExcludedReadId(excludedReadId);
+    bool cond4_1 = satisfiesExcludedReadId(excludedReadId1);
+    bool cond4_2 = satisfiesExcludedReadId(excludedReadId2);
+    bool cond4 = cond4_1 && cond4_2;
     bool cond5 = evalCond5(prop);
     bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
                  getPropRequiredUnlockFlags(prop);
@@ -429,7 +445,8 @@ void rebuildContainerC() {
     unsigned parent = getPropParent(prop);
     bool hasRead = getPropHasRead(prop);
     uint8_t requiredReadId = getPropRequiredReadId(prop);
-    uint8_t excludedReadId = getPropExcludedReadId(prop);
+    uint8_t excludedReadId1 = getPropExcludedReadId1(prop);
+    uint8_t excludedReadId2 = getPropExcludedReadId2(prop);
     uint8_t eyelevel = getPropEyelevel(prop);
     bool isOnetime = getPropIsOnetime(item.prop);
 
@@ -437,7 +454,9 @@ void rebuildContainerC() {
     bool cond2 = satisfiesRequiredReadId(requiredReadId);
     bool cond3 = !hasRead;
     cond3 |= !isOnetime;
-    bool cond4 = satisfiesExcludedReadId(excludedReadId);
+    bool cond4_1 = satisfiesExcludedReadId(excludedReadId1);
+    bool cond4_2 = satisfiesExcludedReadId(excludedReadId2);
+    bool cond4 = cond4_1 && cond4_2;
     bool cond5 = evalCond5(prop);
     bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
                  getPropRequiredUnlockFlags(prop);
@@ -527,7 +546,8 @@ void rebuildObjectiveList() {
       unsigned parent = getPropParent(prop);
       bool hasRead = getPropHasRead(prop);
       uint8_t requiredReadId = getPropRequiredReadId(prop);
-      uint8_t excludedReadId = getPropExcludedReadId(prop);
+      uint8_t excludedReadId1 = getPropExcludedReadId1(prop);
+      uint8_t excludedReadId2 = getPropExcludedReadId2(prop);
       uint8_t eyelevel = getPropEyelevel(prop);
       bool isOnetime = getPropIsOnetime(item.prop);
 
@@ -535,7 +555,9 @@ void rebuildObjectiveList() {
       bool cond2 = satisfiesRequiredReadId(requiredReadId);
       bool cond3 = !hasRead;
       cond3 |= !isOnetime;
-      bool cond4 = satisfiesExcludedReadId(excludedReadId);
+      bool cond4_1 = satisfiesExcludedReadId(excludedReadId1);
+      bool cond4_2 = satisfiesExcludedReadId(excludedReadId2);
+      bool cond4 = cond4_1 && cond4_2;
       bool cond5 = evalCond5(prop);
       bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
                    getPropRequiredUnlockFlags(prop);
