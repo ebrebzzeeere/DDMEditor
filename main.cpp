@@ -24,12 +24,11 @@ struct Element {
   std::string text;
   uint64_t prop;
   /* prop bit assignment
-  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags, 3:eyelevelToggle)
-  slot2 48-55 (0:timerSetter,	 1:unlocks,	   2:requiredUnlockFlags, 3:)
-  slot1 40-47 (0:child,		 1:excludedReadId, 2:newRoot,		  3: )
-  slot0 32-39 (0:requiredReadId, 1:unlocks,	   2:,			  3: )
-  slot3Index 30,31
-  slot2Index 28,29
+  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags,
+  3:eyelevelToggle) slot2 48-55 (0:timerSetter,	 1:unlocks,
+  2:requiredUnlockFlags, 3:) slot1 40-47 (0:child,
+  1:excludedReadId, 2:newRoot,		  3: ) slot0 32-39 (0:requiredReadId,
+  1:unlocks,	   2:,			  3: ) slot3Index 30,31 slot2Index 28,29
   slot1Index 26,27
   slot0Index 24,25
   scene		20-23
@@ -285,10 +284,15 @@ bool hasValidObjective(unsigned verbId) {
     uint8_t requiredReadId = getPropRequiredReadId(prop);
     uint8_t excludedReadId = getPropExcludedReadId(prop);
     uint8_t eyelevel = getPropEyelevel(prop);
+    bool isOnetime = getPropIsOnetime(item.prop);
 
     bool cond1 = (parent == verbId);
     bool cond2 = satisfiesRequiredReadId(requiredReadId);
     bool cond3 = !hasRead;
+    cond3 |= !isOnetime;
+    /*
+     * TODO not isOnetimeなら、cond3は常時false。ただし、hasReadフラグは立てる。
+     */
     bool cond4 = satisfiesExcludedReadId(excludedReadId);
     bool cond5 = evalCond5(prop);
     bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
@@ -427,10 +431,12 @@ void rebuildContainerC() {
     uint8_t requiredReadId = getPropRequiredReadId(prop);
     uint8_t excludedReadId = getPropExcludedReadId(prop);
     uint8_t eyelevel = getPropEyelevel(prop);
+    bool isOnetime = getPropIsOnetime(item.prop);
 
     bool cond1 = (parent == gParent);
     bool cond2 = satisfiesRequiredReadId(requiredReadId);
     bool cond3 = !hasRead;
+    cond3 |= !isOnetime;
     bool cond4 = satisfiesExcludedReadId(excludedReadId);
     bool cond5 = evalCond5(prop);
     bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
@@ -523,10 +529,12 @@ void rebuildObjectiveList() {
       uint8_t requiredReadId = getPropRequiredReadId(prop);
       uint8_t excludedReadId = getPropExcludedReadId(prop);
       uint8_t eyelevel = getPropEyelevel(prop);
+      bool isOnetime = getPropIsOnetime(item.prop);
 
       bool cond1 = (parent == verbId);
       bool cond2 = satisfiesRequiredReadId(requiredReadId);
       bool cond3 = !hasRead;
+      cond3 |= !isOnetime;
       bool cond4 = satisfiesExcludedReadId(excludedReadId);
       bool cond5 = evalCond5(prop);
       bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
@@ -536,7 +544,8 @@ void rebuildObjectiveList() {
                        getPropExcludedUnlockFlags(prop);
       bool cond8 = (gEyelevel == eyelevel) || (eyelevel == 0x0);
 
-      if (cond1 && cond2 && cond3 && cond4 && cond5 && cond6 && cond7 && cond8) {
+      if (cond1 && cond2 && cond3 && cond4 && cond5 && cond6 && cond7 &&
+          cond8) {
         // dummyがいたら、dummyを親にしてやりなおし。
         if (item.text == "dummy") {
           if (hasPropTimerTarget(item.prop)) {
@@ -590,9 +599,9 @@ void sendProperty() {
     noContentState = false;
     rebuildDisplayList();
     rebuildObjectiveList();
-    //if (gParent == gRoot) {
-    //  advanceTimers();
-    //}
+    // if (gParent == gRoot) {
+    //   advanceTimers();
+    // }
     needRedraw = true;
     return;
   }
@@ -644,12 +653,12 @@ void sendProperty() {
 
   //// Remember the condition that made the selected element sendable.  A
   //// successful timerTarget is one-shot and consumes its timer.
-  //bool consumesTimerTarget = hasPropTimerTarget(prop) && evalCond5(prop);
-  //uint8_t timerTargetId = getPropTimerTargetId(prop);
+  // bool consumesTimerTarget = hasPropTimerTarget(prop) && evalCond5(prop);
+  // uint8_t timerTargetId = getPropTimerTargetId(prop);
 
-  //if (consumesTimerTarget) {
-  //  resetTimer(timerTargetId);
-  //}
+  // if (consumesTimerTarget) {
+  //   resetTimer(timerTargetId);
+  // }
 
   if (child) {
     for (const auto &item : containerB) {
@@ -673,14 +682,15 @@ void sendProperty() {
     gParent = id;
   }
 
-  if (isOnetime) {
-    for (auto &item : containerA) {
-      if (item.text == selected.text && item.prop == selected.prop) {
-        item.prop |= (1ULL << 16); // hasRead (bit 16)
-        break;
-      }
+  // Even if not isOnetime, mark as hasRead but always stream.
+  // if (isOnetime) {
+  for (auto &item : containerA) {
+    if (item.text == selected.text && item.prop == selected.prop) {
+      item.prop |= (1ULL << 16); // hasRead (bit 16)
+      break;
     }
   }
+  //}
 
   if (newScene != 0) {
     gScene = newScene;
@@ -705,7 +715,8 @@ void sendProperty() {
   processContainerLifecycle();
   // A timer counts completed dialogue cycles, not individual selections in a
   // verb/objective chain.  Advance only after returning to the current root.
-  if (noContentState && parent != gRoot) { // progress timer when verb to quote loop completed.
+  if (noContentState &&
+      parent != gRoot) { // progress timer when verb to quote loop completed.
     advanceTimers();
   }
   needRedraw = true;
@@ -1006,11 +1017,12 @@ void backupData(const std::string &srcPath = "../dd.txt",
                 const std::string &dstPath = "../dd.txt.bak") {
   std::error_code ec;
   if (std::filesystem::exists(srcPath, ec)) {
-    std::filesystem::copy_file(srcPath, dstPath,
-                               std::filesystem::copy_options::overwrite_existing,
-                               ec);
+    std::filesystem::copy_file(
+        srcPath, dstPath, std::filesystem::copy_options::overwrite_existing,
+        ec);
     if (ec) {
-      std::cerr << "バックアップの作成に失敗しました: " << ec.message() << std::endl;
+      std::cerr << "バックアップの作成に失敗しました: " << ec.message()
+                << std::endl;
     }
   }
 }
