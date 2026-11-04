@@ -993,3 +993,8 @@ main.cppのprop bit assignmentの仕様を変更してほしい。
   - cond4 = cond4_1 && cond4_2;
   - `hasValidObjective`, `rebuildContainerC`, `rebuildObjectiveList` それぞれで独立して評価。
 - `unlocks` の割り当て（slot0-1, slot2-1）は維持。
+
+
+見る>まわりのようにすると、フラグで空いたものがないかどうか定期的に巡回しなくてはいけなくて、めんどくさい。
+だけど、見る＞向こうのたてものみたいにすると選択肢を開けるゲームに変わる。まあ、そうなんだけど。
+どんな目的語が最適なんだろう。

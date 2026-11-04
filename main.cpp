@@ -182,7 +182,7 @@ bool noContentState = false;
 SDL_Window *gWindow = nullptr;
 SDL_Renderer *gRenderer = nullptr;
 
-unsigned gScene = 0;
+unsigned gScene = 2;
 unsigned gRoot = 0;
 unsigned gParent = 0;
 unsigned gUnlocks = 0;
