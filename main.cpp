@@ -187,6 +187,7 @@ unsigned gRoot = 0;
 unsigned gParent = 0;
 unsigned gUnlocks = 0;
 unsigned gEyelevel = 1;
+unsigned gTick = 0;
 
 // タイマー 0-3
 unsigned gTimers[4] = {0, 0, 0, 0};
