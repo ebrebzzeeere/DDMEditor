@@ -215,16 +215,26 @@ enum TimerAction : uint8_t {
 // 対象は gTick, gScene, gRoot, gParent, gUnlocks, gEyelevel,
 // gTimer0〜gTimer3（gTimers[0..3] への参照）のみ。該当しなければ nullptr。
 inline const unsigned *resolvePlaceholderVar(const std::string &name) {
-  if (name == "gTick") return &gTick;
-  if (name == "gScene") return &gScene;
-  if (name == "gRoot") return &gRoot;
-  if (name == "gParent") return &gParent;
-  if (name == "gUnlocks") return &gUnlocks;
-  if (name == "gEyelevel") return &gEyelevel;
-  if (name == "gTimer0") return &gTimer0;
-  if (name == "gTimer1") return &gTimer1;
-  if (name == "gTimer2") return &gTimer2;
-  if (name == "gTimer3") return &gTimer3;
+  if (name == "gTick")
+    return &gTick;
+  if (name == "gScene")
+    return &gScene;
+  if (name == "gRoot")
+    return &gRoot;
+  if (name == "gParent")
+    return &gParent;
+  if (name == "gUnlocks")
+    return &gUnlocks;
+  if (name == "gEyelevel")
+    return &gEyelevel;
+  if (name == "gTimer0")
+    return &gTimer0;
+  if (name == "gTimer1")
+    return &gTimer1;
+  if (name == "gTimer2")
+    return &gTimer2;
+  if (name == "gTimer3")
+    return &gTimer3;
   return nullptr;
 }
 
@@ -441,7 +451,8 @@ void renderConsole() {
       hasObj = hasValidObjective(verbId);
     }
 
-    // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 text は変更しない。
+    // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 text
+    // は変更しない。
     std::string itemText = expandTextPlaceholders(displayList[i].text);
     if (!hasObj) {
       itemText = "[" + itemText + "]";
@@ -468,7 +479,8 @@ void renderConsole() {
       }
     } else {
       for (size_t j = 0; j < objectiveList.size(); ++j) {
-        // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 text は変更しない。
+        // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 text
+        // は変更しない。
         std::string objText = expandTextPlaceholders(objectiveList[j].text);
         if (objText.empty()) {
           objText = "[空]";
@@ -996,6 +1008,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             isObjectiveSelected = false;
             needRedraw = true;
           }
+        } else if (key == SDLK_M) {
+// TODO
         }
       }
     }
