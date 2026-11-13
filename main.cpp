@@ -17,6 +17,7 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -24,16 +25,12 @@ struct Element {
   std::string text;
   uint64_t prop;
   /* prop bit assignment
-  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags,  3:eyelevelToggle)
-  slot2 48-55 (0:timerSetter,	 1:unlocks,	   2:requiredUnlockFlags,  3:excludedReadId)
-  slot1 40-47 (0:child,		 1:excludedReadId, 2:newRoot,		   3: )
-  slot0 32-39 (0:requiredReadId, 1:unlocks,	   2:,			   3: )
-  slot3Index 30,31
-  slot2Index 28,29
-  slot1Index 26,27
-  slot0Index 24,25
-  scene		20-23
-  vacant	19
+  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags,
+  3:eyelevelToggle) slot2 48-55 (0:timerSetter,	 1:unlocks,
+  2:requiredUnlockFlags,  3:excludedReadId) slot1 40-47 (0:child,
+  1:excludedReadId, 2:newRoot,		   3: ) slot0 32-39 (0:requiredReadId,
+  1:unlocks,	   2:,			   3: ) slot3Index 30,31 slot2Index
+  28,29 slot1Index 26,27 slot0Index 24,25 scene		20-23 vacant	19
   isOnetime	18
   isQuote	17
   hasRead	16
@@ -205,6 +202,66 @@ enum TimerAction : uint8_t {
   TIMER_ACTION_RESET = 3,
 };
 
+// --- %(変数名) プレースホルダの展開（表示時のみ） ---
+// Element.text に含まれる %(name) を正規表現 %\(([A-Za-z0-9]+)\) で検出し、
+// name が対象変数名リストに含まれる場合のみ、その変数の現在値を 10 進文字列に
+// 置換する。対象外の name の %(name) はリテラルとしてそのまま出力する
+// （置換・削除しない）。1 つの text に複数の %(…) がある場合はすべて処理する。
+// 展開は renderConsole の出力直前でのみ行う。格納された text
+// （containerA / containerB / containerC / displayList / objectiveList）は
+// 変更せず、SDL_AppQuit で dd.txt に書き戻すテンプレートも元のまま残す。
+
+// %(name) の name を対象グローバル変数へのポインタとして解決する。
+// 対象は gTick, gScene, gRoot, gParent, gUnlocks, gEyelevel,
+// gTimer0〜gTimer3（gTimers[0..3] への参照）のみ。該当しなければ nullptr。
+inline const unsigned *resolvePlaceholderVar(const std::string &name) {
+  if (name == "gTick") return &gTick;
+  if (name == "gScene") return &gScene;
+  if (name == "gRoot") return &gRoot;
+  if (name == "gParent") return &gParent;
+  if (name == "gUnlocks") return &gUnlocks;
+  if (name == "gEyelevel") return &gEyelevel;
+  if (name == "gTimer0") return &gTimer0;
+  if (name == "gTimer1") return &gTimer1;
+  if (name == "gTimer2") return &gTimer2;
+  if (name == "gTimer3") return &gTimer3;
+  return nullptr;
+}
+
+// text 中の %(name) を、name が対象変数ならその現在の値の 10 進文字列に置換
+// した新しい文字列を返す。対象外の %(name) とそれ以外のテキストはそのまま
+// 結果に含める。呼び出し元が保持する text は変更しない。
+std::string expandTextPlaceholders(const std::string &text) {
+  static const std::regex placeholder("%\\(([A-Za-z0-9]+)\\)");
+  std::string result;
+  std::string::size_type cursor = 0;
+  std::smatch match;
+  while (std::regex_search(text.cbegin() + cursor, text.cend(), match,
+                           placeholder)) {
+    // match[0] / match[1] は string として取る（内容と長さは信頼できる）。
+    // 一致開始位置は、cursor 以降の text から一致文字列と同じバイト列を
+    // find で探すことで確定する。正規表現は leftmost の一致を返すため、
+    // 同じバイト列の最初の出現位置は一致位置と一致する。
+    const std::string matched = match[0].str();
+    const std::string name = match[1].str();
+    const std::string::size_type found = text.find(matched, cursor);
+    if (found == std::string::npos) {
+      // 念のための防御分岐。一致位置を確定できない場合は残りをそのまま残す。
+      break;
+    }
+    result.append(text, cursor, found - cursor);
+    const unsigned *value = resolvePlaceholderVar(name);
+    if (value != nullptr) {
+      result += std::to_string(*value);
+    } else {
+      result += matched;
+    }
+    cursor = found + matched.size();
+  }
+  result.append(text, cursor, text.size() - cursor);
+  return result;
+}
+
 // containerB contains only elements in gScene.  ID 0 means that the
 // corresponding read-state condition is not configured.
 inline bool isReadInCurrentScene(uint8_t id) {
@@ -281,6 +338,7 @@ inline void advanceTimers() {
 
     gPendingTimerActions[timerId] = TIMER_ACTION_NONE;
   }
+  ++gTick;
 }
 
 void rebuildContainerB();
@@ -383,7 +441,8 @@ void renderConsole() {
       hasObj = hasValidObjective(verbId);
     }
 
-    std::string itemText = displayList[i].text;
+    // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 text は変更しない。
+    std::string itemText = expandTextPlaceholders(displayList[i].text);
     if (!hasObj) {
       itemText = "[" + itemText + "]";
     }
@@ -409,7 +468,8 @@ void renderConsole() {
       }
     } else {
       for (size_t j = 0; j < objectiveList.size(); ++j) {
-        std::string objText = objectiveList[j].text;
+        // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 text は変更しない。
+        std::string objText = expandTextPlaceholders(objectiveList[j].text);
         if (objText.empty()) {
           objText = "[空]";
         }
@@ -721,6 +781,7 @@ void sendProperty() {
     gParent = 0;
     gUnlocks = 0;
     gEyelevel = 0;
+    gTick = 0;
   } else {
     gUnlocks |= unlocks0 | unlocks2;
 
@@ -732,6 +793,7 @@ void sendProperty() {
       gRoot = newRoot;
       gUnlocks = 0x0; // リセットする。
       gEyelevel = 0;
+      gTick = 0; // とりあえずリセットしておく。
     }
   }
 
