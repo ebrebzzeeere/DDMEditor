@@ -33,21 +33,6 @@
 
 ### プロンプト下書き
 次の指示を出すプロンプトを出力してほしい。
-作業に際しては/home/herb1s/Projects/NEELA/DDMEditor/main.cpp, /home/herb1s/Projects/NEELA/DDMEditor/dd.txtの2ファイルのみ読み込みしてよい、書き込みは前者のmain.cppのみに限る。
 **指示**
 移動するコマンドを実装してほしい。
-見る　*話す　行く
-おじいさん
--> SDLK_M入力
-移動する
-公園　食堂
--> SDLK_M入力
-見る　*話す　行く
-おじいさん
-のようにSDLK_MでdisplayListと移動するコンテナをトグル表示してほしい。
-ただし、もとのモードに戻っても、gSceneやgUnlocksをはじめとする変数は一切編集しないで、
-selectedIndexさえもそのままで再度表示してほしい。なので、sendProperty()内で毎回displayListのように移動先リストを構成し、
-単に別でトグル表示するのが良いだろう。でも、selectedIndexなどのinputシステムは流用するので、
-トグルの時元のselectedIndexをsuspendする配列などを作るのがよいかもしれない。
-
-ただし、移動するモードでは常にisObjectiveSelected == trueとする。
+作業に際しては/home/herb1s/Projects/NEELA/DDMEditor/main.cpp, /home/herb1s/Projects/NEELA/DDMEditor/dd.txtの2ファイルのみ読み込みしてよい、書き込みは前者のmain.cppのみに限る。

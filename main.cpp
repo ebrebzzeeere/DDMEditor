@@ -176,6 +176,18 @@ bool isObjectiveSelected = false;
 bool needRedraw = true;
 bool noContentState = false;
 
+// --- 「移動する」コンテナ(id == 04)のトグル表示用 ---
+// SDLK_Mの入力でdisplayListと「移動する」コンテナをトグル表示する。
+// 入力システム(selectedIndex等の選択状態)は新規処理を新設せず流用し、
+// トグル時にsuspend用の配列へ退避し、復元時にその値をそのまま戻す。
+bool gMoveMode = false;
+std::vector<Element> gSuspendedDisplayList;
+std::vector<Element> gSuspendedObjectiveList;
+size_t gSuspendedSelectedIndex = 0;
+size_t gSuspendedSelectedObjectiveIndex = 0;
+bool gSuspendedIsObjectiveSelected = false;
+bool gSuspendedNoContentState = false;
+
 SDL_Window *gWindow = nullptr;
 SDL_Renderer *gRenderer = nullptr;
 
@@ -355,6 +367,9 @@ void rebuildContainerB();
 void rebuildContainerC();
 void rebuildDisplayList();
 void rebuildObjectiveList();
+void rebuildMoveDestinationList();
+void enterMoveMode();
+void exitMoveMode();
 
 // 指定されたverbIdをparentとして持つ有効なobjectiveが存在するか判定
 bool hasValidObjective(unsigned verbId) {
@@ -657,6 +672,73 @@ void rebuildObjectiveList() {
   } while (hasDummy);
 }
 
+// --- 「移動する」コンテナ(id == 04)のトグル表示 ---
+// 移動先リストはdisplayListと同じように毎回、parent == 04のElementから
+// 構成する。gScene・gUnlocksをはじめとする変数は一切編集しない。
+// 2段目はobjectiveList/selectedObjectiveIndexをそのまま流用するため、
+// 入力システムの別処理は新設しない。
+void rebuildMoveDestinationList() {
+  objectiveList.clear();
+  for (const auto &item : containerB) {
+    if (getPropParent(item.prop) == 0x04) {
+      objectiveList.push_back(item);
+    }
+  }
+}
+
+// トグル前に、inputシステム(displayList / objectiveListと
+// selectedIndex・選択状態)の値をsuspend用の配列へ退避し、
+// 「移動する」コンテナの表示に切り替える。
+void enterMoveMode() {
+  // 「移動する」(id == 04)の要素がないシーンではトグルしない。
+  Element marker;
+  bool foundMarker = false;
+  for (const auto &item : containerB) {
+    if (getPropID(item.prop) == 0x04) {
+      marker = item;
+      foundMarker = true;
+      break;
+    }
+  }
+  if (!foundMarker) {
+    return;
+  }
+
+  // 退避。復元時にそのまま戻すため、ここでは一切変更しない。
+  gSuspendedDisplayList = displayList;
+  gSuspendedObjectiveList = objectiveList;
+  gSuspendedSelectedIndex = selectedIndex;
+  gSuspendedSelectedObjectiveIndex = selectedObjectiveIndex;
+  gSuspendedIsObjectiveSelected = isObjectiveSelected;
+  gSuspendedNoContentState = noContentState;
+
+  gMoveMode = true;
+
+  // 「移動する」モード中は常にisObjectiveSelected == trueとする。
+  // 1段目は見る・話す・行く(verb)とは別の欄として「移動する」(id == 04)
+  // のみを表示し、selectedIndexは常にその要素を指す。
+  selectedIndex = 0;
+  selectedObjectiveIndex = 0;
+  isObjectiveSelected = true;
+  displayList.clear();
+  displayList.push_back(marker);
+
+  // 2段目: 移動先リストを毎回parent == 04のElementから構成する。
+  rebuildMoveDestinationList();
+}
+
+// 「移動する」表示を解除し、退避していたinputシステムの値をそのまま
+// 戻して、トグル前の表示をそのまま再表示する。
+void exitMoveMode() {
+  gMoveMode = false;
+  displayList = gSuspendedDisplayList;
+  objectiveList = gSuspendedObjectiveList;
+  selectedIndex = gSuspendedSelectedIndex;
+  selectedObjectiveIndex = gSuspendedSelectedObjectiveIndex;
+  isObjectiveSelected = gSuspendedIsObjectiveSelected;
+  noContentState = gSuspendedNoContentState;
+}
+
 void processContainerLifecycle() {
   rebuildContainerB();
   rebuildContainerC();
@@ -674,6 +756,15 @@ void processContainerLifecycle() {
 }
 
 void sendProperty() {
+  // 「移動する」トグル表示中: 移動先リストはdisplayListと同じように
+  // parent == 04のElementから毎回構成するが、送信は行わず、
+  // gScene・gUnlocksをはじめとする変数は一切編集しない。
+  if (gMoveMode) {
+    rebuildMoveDestinationList();
+    needRedraw = true;
+    return;
+  }
+
   if (noContentState) {
     rebuildContainerB();
     rebuildContainerC();
@@ -952,7 +1043,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         return SDL_APP_SUCCESS;
       }
 
-      if (key == SDLK_TAB) {
+      // 「移動する」モード中は挿入しない(退避した元の表示・選択を壊さない)。
+      if (key == SDLK_TAB && !gMoveMode) {
         gAppMode = MODE_INSERT_TEXT;
         gInputText.clear();
 
@@ -1004,12 +1096,23 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
           }
         } else if (key == SDLK_U) {
           // Objective選択中の場合、Verbの段に移動
-          if (isObjectiveSelected) {
+          // 「移動する」モード中は常にisObjectiveSelected == trueなので
+          // ここでは解除しない。
+          if (isObjectiveSelected && !gMoveMode) {
             isObjectiveSelected = false;
             needRedraw = true;
           }
         } else if (key == SDLK_M) {
-// TODO
+          // displayListと「移動する」コンテナをトグル表示する。
+          // トグル時にinputシステムの値(selectedIndex・選択状態など)を
+          // suspend用の配列へ退避し、復元時にその値を戻して元の表示を
+          // そのまま再表示する。
+          if (gMoveMode) {
+            exitMoveMode();
+          } else {
+            enterMoveMode();
+          }
+          needRedraw = true;
         }
       }
     }
