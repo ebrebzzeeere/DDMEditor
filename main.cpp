@@ -25,19 +25,24 @@ struct Element {
   std::string text;
   uint64_t prop;
   /* prop bit assignment
-  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags,
-  3:eyelevelToggle) slot2 48-55 (0:timerSetter,	 1:unlocks,
-  2:requiredUnlockFlags,  3:excludedReadId) slot1 40-47 (0:child,
-  1:excludedReadId, 2:newRoot,		   3: ) slot0 32-39 (0:requiredReadId,
-  1:unlocks,	   2:,			   3: ) slot3Index 30,31 slot2Index
-  28,29 slot1Index 26,27 slot0Index 24,25 scene		20-23 vacant	19
-  isOnetime	18
-  isQuote	17
-  hasRead	16
-  parent	8-15
-  id		0-7
+*  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags, 3:eyelevelToggle)
+*  slot2 48-55 (0:timerSetter,	 1:unlocks, 	   2:requiredUnlockFlags, 3:excludedReadId)
+*  slot1 40-47 (0:child,	 1:excludedReadId, 2:newRoot,		  3: )
+*  slot0 32-39 (0:requiredReadId,1:unlocks,	   2:,			  3: )
+*  slot3Index 30,31
+*  slot2Index 28,29
+*  slot1Index 26,27
+*  slot0Index 24,25
+*  scene      20-23
+*  vacant	19
+*  isOnetime	18
+*  isQuote	17
+*  hasRead	16
+*  parent	8-15
+*  id		0-7
 
-*/
+   *
+   */
   /*
     timerTarget 8bit
     count 4-7
@@ -163,6 +168,7 @@ inline uint8_t getSlotValue(uint64_t prop, uint8_t slot) {
 }
 
 // グローバル変数
+namespace {
 std::vector<Element> containerA;
 std::vector<Element> containerB;
 std::vector<Element> containerC;
@@ -191,7 +197,7 @@ bool gSuspendedNoContentState = false;
 SDL_Window *gWindow = nullptr;
 SDL_Renderer *gRenderer = nullptr;
 
-unsigned gScene = 2;
+unsigned gScene = 1;
 unsigned gRoot = 0;
 unsigned gParent = 0;
 unsigned gUnlocks = 0;
@@ -214,6 +220,14 @@ enum TimerAction : uint8_t {
   TIMER_ACTION_RESET = 3,
 };
 
+unsigned gTicketNumber = 0;
+
+// --- gTick秒読みタイマー用の状態 ---
+// duration（1-3の乱数）を設定した時点のgTickを秒読み開始点として記録し、
+// 現在gTickとの差がdurationに等しくなった時点で発火する。
+unsigned gGTickDuration = 0; // 0: 未設定（初回呼び出しで抽選・設定する）
+unsigned gGTickStamp = 0;    // duration設定時点のgTick（秒読み開始点）
+} // namespace
 // --- %(変数名) プレースホルダの展開（表示時のみ） ---
 // Element.text に含まれる %(name) を正規表現 %\(([A-Za-z0-9]+)\) で検出し、
 // name が対象変数名リストに含まれる場合のみ、その変数の現在値を 10 進文字列に
@@ -247,6 +261,8 @@ inline const unsigned *resolvePlaceholderVar(const std::string &name) {
     return &gTimer2;
   if (name == "gTimer3")
     return &gTimer3;
+  if (name == "gTicketNumber")
+    return &gTicketNumber;
   return nullptr;
 }
 
@@ -363,6 +379,41 @@ inline void advanceTimers() {
   ++gTick;
 }
 
+// --- gTick秒読みタイマー ---
+// sendProperty()内からの呼び出しを想定する。
+// 初回呼び出しで1-3のdurationを抽選し、その時点のgTickを秒読み開始点として
+// 記録する（この時点では発火しない）。以後の呼び出しで、現在gTickと開始点の
+// 差がdurationに等しくなった時点で発火し（true）、新たなdurationを抽選して
+// 開始点を現在のgTickへ更新し、秒読みを再開する。
+// gTickがシーン変更/newRootでリセットされた場合（現在値 < 開始点）は、
+// 現在のgTickを新しい開始点として秒読みをやり直す。
+bool gTickTimer() {
+  static std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<unsigned> dist(1, 3);
+
+  if (gGTickDuration == 0) {
+    gGTickDuration = dist(rng);
+    gGTickStamp = gTick;
+    gUnlocks &= ~1ULL;
+    return false;
+  }
+
+  if (gTick < gGTickStamp) { // gTickリセット検出: 開始点を更新して続行
+    gGTickStamp = gTick;
+    gUnlocks &= ~1ULL;
+    return false;
+  }
+
+  if (gTick - gGTickStamp == gGTickDuration) {
+    gGTickDuration = dist(rng); // 発火後、次のdurationを設定し秒読みを再開
+    gGTickStamp = gTick;
+    gUnlocks |= 0x1;
+    return true;
+  }
+  gUnlocks &= ~1ULL;
+  return false;
+}
+
 void rebuildContainerB();
 void rebuildContainerC();
 void rebuildDisplayList();
@@ -370,6 +421,29 @@ void rebuildObjectiveList();
 void rebuildMoveDestinationList();
 void enterMoveMode();
 void exitMoveMode();
+
+bool gimmick(uint64_t prop) {
+  // switch(gScene)
+gTickTimer();
+  switch (prop) {
+  case 0x0010000000100a07ULL: // 札を取る。
+    gTicketNumber = gTick + 1032;
+    return true;
+    break;
+  default:
+    return false;
+    break;
+  }
+  /*
+   * このなかでやることは多い。書いていく。
+   * 札ギミックの時
+   *
+   * 札を取る
+   * 札の番号を生成して返す、保持する。
+   * もう一度札を持っていたらチェックして、取り替えるかどうか聞く。
+   *
+   */
+}
 
 // 指定されたverbIdをparentとして持つ有効なobjectiveが存在するか判定
 bool hasValidObjective(unsigned verbId) {
@@ -821,6 +895,10 @@ void sendProperty() {
 
   uint64_t prop = selected.prop;
 
+  if (gimmick(prop)) {
+    return;
+  }
+
   unsigned id = getPropID(prop);
   unsigned parent = getPropParent(prop);
   unsigned child = getPropChild(prop);
@@ -1251,3 +1329,62 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
   if (gWindow)
     SDL_DestroyWindow(gWindow);
 }
+/*
+### 役所の札ギミック
+- 役所のギミックは札のギミック。
+- 札の番号によって、話せる役人が異なる。
+- 偶数と奇数、素数によって挙動が変わる。
+- 札の番号はおそらくシステム上のtickを使うとよいだろう。
+- gTickのような変数を用意するのがいいと思う。
+
+### 商館の見回りギミック
+- 商館では階段を見回る係の者がおり、そいつに止められてしまう。
+- しかし、どうしてかときたまそいつは持ち場を離れるので、
+- その隙に階段を登ってしまおう。
+- 持ち場を離れて2tickごとぐらいに戻ってくるぞ。
+
+### 同意形成ゲーム
+- このフロアでは、見ることで話し声が聞こえる。
+- 連続で見ると声をひそめられる。
+- 3回までなら、聞ける。あとはよく聞こえない。
+- 立食パーティ風にお茶を渡して、交渉、ナンパ。
+- 見るコマンドで事情を推察し、実際に話すコマンドで話す、お茶を渡す。
+- 交渉を成立させていく。
+- 3回交渉成立で、ショーメイ成功。拍手しながら階段を降りてくる。
+-
+
+---
+
+### アイデア
+見回りギミックをクリアして、2階へ。
+2階でのギミックは？
+コマンド成立前に、たくさんひっかけする。
+同意形成ゲームで、交渉以外にナンパのギミックも考える。
+
+---
+
+### やること
+- 札を取得した時、その時の札番号を保持し、examineする。
+    - 札を取る07
+    - 札番号を返す。
+    - 札スロットに札番号を保存する。
+    - N番だ。
+    -
+
+- カスタムファンクションクラスタ、Sceneごとに違う関数クラスタをbaseのmain
+loopに挿入する。
+- ファンクションクラスタ内にもddを設置する。
+- ファンクションドリブンのdialogue.
+- DialogueDataの拡張機能。かゆいところに手が届く機能。DDMを最大限活かす機能。
+
+---
+
+### プロンプト下書き
+次の指示を出すプロンプトを出力してほしい。
+**指示**
+移動するコマンドを実装してほしい。
+作業に際しては/home/herb1s/Projects/NEELA/DDMEditor/main.cpp,
+/home/herb1s/Projects/NEELA/DDMEditor/dd.txtの2ファイルのみ読み込みしてよい、書き込みは前者のmain.cppのみに限る。
+*      ____         _________
+* ____|   |________|        |________ 不規則なパルス
+*/
