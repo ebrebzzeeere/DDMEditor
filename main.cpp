@@ -1,11 +1,3 @@
-/*
- * 本当のことをいうと、rootにもどってきたとき、rootの選択肢は全部持っていて、
- * onetimeQuoteがあったとき、onetimeQuoteを優先して配信する。
- * その後、onetimeQuoteがなくなるまで、loopを回す。
- * でも、特別なループは用意しないほうがいいと思う。
- *
- * あと、rootのとき、あたりまえだけど他のonetimeQuoteと競合するとtimerで有効になってるものは当たり前だけど普通に配信されない。
- */
 #include <SDL3/SDL_keycode.h>
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
@@ -22,11 +14,13 @@
 #include <vector>
 
 struct Element {
-  std::string text;
+  std::string dialogue;
   uint64_t prop;
   /* prop bit assignment
-*  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags, 3:eyelevelToggle)
-*  slot2 48-55 (0:timerSetter,	 1:unlocks, 	   2:requiredUnlockFlags, 3:excludedReadId)
+*  slot3 56-63 (0:timerTarget,	 1:newScene,	   2:excludedUnlockFlags,
+3:eyelevelToggle)
+*  slot2 48-55 (0:timerSetter,	 1:unlocks, 	   2:requiredUnlockFlags,
+3:excludedReadId)
 *  slot1 40-47 (0:child,	 1:excludedReadId, 2:newRoot,		  3: )
 *  slot0 32-39 (0:requiredReadId,1:unlocks,	   2:,			  3: )
 *  slot3Index 30,31
@@ -59,6 +53,100 @@ struct Element {
     eyelevel 0-3       // 自身のeyelevel
     */
 };
+
+
+
+
+
+/*
+* もう本当に言うけど、このシステム本当に複雑すぎる。
+* 頭使いすぎて、頭おかしくなる。
+* 地頭で考えるの本当にアホすぎる。
+*
+*
+*
+* */
+
+
+
+
+
+
+/*
+Elementを作るのを補助するGUIソフトを作ってほしい。
+ただし、./main.cpp, ./dd.txtのみreadしてよい、writeはしてはいけない。その他のファイルのread, writeは不可。
+作業にあたっては、事前にElement構造体とそのpropのprop bit assignmentの仕様を十分に把握すること。
+まず、dd.txtをアップロードしたら、idとparentを参照して、ノードを構成してほしい。(ビューワ機能)
+Unreal Engineのblueprintやblenderのノードのような、Element同士が線でつながっているようなGUIにしてほしい。
+Elementを追加するときは、テキストウィンドウにdialogueを入力して、ノードを追加し、
+GUI操作で、parentを選択したい。また、同様にchildも選択できるようにしたい。(エディタ機能)
+まずは、dd.txtをビューワ機能で表示するところから始めてほしい。そのうえで、全く同じdd.txtを出力できることを目指してほしい。
+ビューワにも種類を設け、parentとchildによってヒエラルキーを可視化するファミリービューワ
+requiredReadId, excludeReadIdを可視化したconstraintビューワを実装してほしい。
+その他、エディタ機能では適宜メニューから、その他のスロットのオプションを選択出来るようにしてほしい。
+私に仕様を確認することなく、一気に完成させてほしい。不十分な機能は追ってフィードバックすることを前提に開発してほしい。
+*
+* */
+
+/*
+### 役所の札ギミック
+- 役所のギミックは札のギミック。
+- 札の番号によって、話せる役人が異なる。
+- 偶数と奇数、素数によって挙動が変わる。
+- 札の番号はおそらくシステム上のtickを使うとよいだろう。
+- gTickのような変数を用意するのがいいと思う。
+
+### 商館の見回りギミック
+- 商館では階段を見回る係の者がおり、そいつに止められてしまう。
+- しかし、どうしてかときたまそいつは持ち場を離れるので、
+- その隙に階段を登ってしまおう。
+- 持ち場を離れて2tickごとぐらいに戻ってくるぞ。
+
+### 同意形成ゲーム
+- このフロアでは、見ることで話し声が聞こえる。
+- 連続で見ると声をひそめられる。
+- 3回までなら、聞ける。あとはよく聞こえない。
+- 立食パーティ風にお茶を渡して、交渉、ナンパ。
+- 見るコマンドで事情を推察し、実際に話すコマンドで話す、お茶を渡す。
+- 交渉を成立させていく。
+- 3回交渉成立で、ショーメイ成功。拍手しながら階段を降りてくる。
+-
+
+---
+
+### アイデア
+見回りギミックをクリアして、2階へ。
+2階でのギミックは？
+コマンド成立前に、たくさんひっかけする。
+同意形成ゲームで、交渉以外にナンパのギミックも考える。
+
+---
+
+### やること
+- 札を取得した時、その時の札番号を保持し、examineする。
+    - 札を取る07
+    - 札番号を返す。
+    - 札スロットに札番号を保存する。
+    - N番だ。
+    -
+
+- カスタムファンクションクラスタ、Sceneごとに違う関数クラスタをbaseのmain
+loopに挿入する。
+- ファンクションクラスタ内にもddを設置する。
+- ファンクションドリブンのdialogue.
+- DialogueDataの拡張機能。かゆいところに手が届く機能。DDMを最大限活かす機能。
+
+---
+
+### プロンプト下書き
+次の指示を出すプロンプトを出力してほしい。
+**指示**
+移動するコマンドを実装してほしい。
+作業に際しては/home/herb1s/Projects/NEELA/DDMEditor/main.cpp,
+/home/herb1s/Projects/NEELA/DDMEditor/dd.txtの2ファイルのみ読み込みしてよい、書き込みは前者のmain.cppのみに限る。
+*      ____         _________
+* ____|   |________|        |________ 不規則なパルス
+*/
 
 // --- ヘルパー関数: プロパティのフィールド抽出 (new prop bit assignment準拠)
 // ---
@@ -203,6 +291,8 @@ unsigned gParent = 0;
 unsigned gUnlocks = 0;
 unsigned gEyelevel = 1;
 unsigned gTick = 0;
+unsigned gTicketNumber = 0;
+unsigned gCallingNumber = 1031;
 
 // タイマー 0-3
 unsigned gTimers[4] = {0, 0, 0, 0};
@@ -220,8 +310,6 @@ enum TimerAction : uint8_t {
   TIMER_ACTION_RESET = 3,
 };
 
-unsigned gTicketNumber = 0;
-
 // --- gTick秒読みタイマー用の状態 ---
 // duration（1-3の乱数）を設定した時点のgTickを秒読み開始点として記録し、
 // 現在gTickとの差がdurationに等しくなった時点で発火する。
@@ -229,11 +317,11 @@ unsigned gGTickDuration = 0; // 0: 未設定（初回呼び出しで抽選・設
 unsigned gGTickStamp = 0;    // duration設定時点のgTick（秒読み開始点）
 } // namespace
 // --- %(変数名) プレースホルダの展開（表示時のみ） ---
-// Element.text に含まれる %(name) を正規表現 %\(([A-Za-z0-9]+)\) で検出し、
+// Element.dialogue に含まれる %(name) を正規表現 %\(([A-Za-z0-9]+)\) で検出し、
 // name が対象変数名リストに含まれる場合のみ、その変数の現在値を 10 進文字列に
 // 置換する。対象外の name の %(name) はリテラルとしてそのまま出力する
-// （置換・削除しない）。1 つの text に複数の %(…) がある場合はすべて処理する。
-// 展開は renderConsole の出力直前でのみ行う。格納された text
+// （置換・削除しない）。1 つの dialogue に複数の %(…) がある場合はすべて処理する。
+// 展開は renderConsole の出力直前でのみ行う。格納された dialogue
 // （containerA / containerB / containerC / displayList / objectiveList）は
 // 変更せず、SDL_AppQuit で dd.txt に書き戻すテンプレートも元のまま残す。
 
@@ -263,31 +351,34 @@ inline const unsigned *resolvePlaceholderVar(const std::string &name) {
     return &gTimer3;
   if (name == "gTicketNumber")
     return &gTicketNumber;
+  if (name == "gCallingNumber")
+    return &gCallingNumber;
+
   return nullptr;
 }
 
-// text 中の %(name) を、name が対象変数ならその現在の値の 10 進文字列に置換
+// dialogue 中の %(name) を、name が対象変数ならその現在の値の 10 進文字列に置換
 // した新しい文字列を返す。対象外の %(name) とそれ以外のテキストはそのまま
-// 結果に含める。呼び出し元が保持する text は変更しない。
-std::string expandTextPlaceholders(const std::string &text) {
+// 結果に含める。呼び出し元が保持する dialogue は変更しない。
+std::string expandTextPlaceholders(const std::string &dialogue) {
   static const std::regex placeholder("%\\(([A-Za-z0-9]+)\\)");
   std::string result;
   std::string::size_type cursor = 0;
   std::smatch match;
-  while (std::regex_search(text.cbegin() + cursor, text.cend(), match,
+  while (std::regex_search(dialogue.cbegin() + cursor, dialogue.cend(), match,
                            placeholder)) {
     // match[0] / match[1] は string として取る（内容と長さは信頼できる）。
-    // 一致開始位置は、cursor 以降の text から一致文字列と同じバイト列を
+    // 一致開始位置は、cursor 以降の dialogue から一致文字列と同じバイト列を
     // find で探すことで確定する。正規表現は leftmost の一致を返すため、
     // 同じバイト列の最初の出現位置は一致位置と一致する。
     const std::string matched = match[0].str();
     const std::string name = match[1].str();
-    const std::string::size_type found = text.find(matched, cursor);
+    const std::string::size_type found = dialogue.find(matched, cursor);
     if (found == std::string::npos) {
       // 念のための防御分岐。一致位置を確定できない場合は残りをそのまま残す。
       break;
     }
-    result.append(text, cursor, found - cursor);
+    result.append(dialogue, cursor, found - cursor);
     const unsigned *value = resolvePlaceholderVar(name);
     if (value != nullptr) {
       result += std::to_string(*value);
@@ -296,7 +387,7 @@ std::string expandTextPlaceholders(const std::string &text) {
     }
     cursor = found + matched.size();
   }
-  result.append(text, cursor, text.size() - cursor);
+  result.append(dialogue, cursor, dialogue.size() - cursor);
   return result;
 }
 
@@ -394,23 +485,19 @@ bool gTickTimer() {
   if (gGTickDuration == 0) {
     gGTickDuration = dist(rng);
     gGTickStamp = gTick;
-    gUnlocks &= ~1ULL;
     return false;
   }
 
   if (gTick < gGTickStamp) { // gTickリセット検出: 開始点を更新して続行
     gGTickStamp = gTick;
-    gUnlocks &= ~1ULL;
     return false;
   }
 
   if (gTick - gGTickStamp == gGTickDuration) {
     gGTickDuration = dist(rng); // 発火後、次のdurationを設定し秒読みを再開
     gGTickStamp = gTick;
-    gUnlocks |= 0x1;
     return true;
   }
-  gUnlocks &= ~1ULL;
   return false;
 }
 
@@ -423,8 +510,15 @@ void enterMoveMode();
 void exitMoveMode();
 
 bool gimmick(uint64_t prop) {
-  // switch(gScene)
-gTickTimer();
+  // 本当はswitch(gScene)を入れて汎用的な関数クラスタにしたい。
+
+  if (gTickTimer()) {
+    gUnlocks |= 0x1;
+    ++gCallingNumber;
+  } else {
+    gUnlocks &= ~1ULL;
+  }
+
   switch (prop) {
   case 0x0010000000100a07ULL: // 札を取る。
     gTicketNumber = gTick + 1032;
@@ -528,7 +622,7 @@ void renderConsole() {
     if (verbChild) {
       for (const auto &item : containerB) {
         if (getPropID(item.prop) == verbChild) {
-          if (item.text == "dummy") {
+          if (item.dialogue == "dummy") {
             hasObj = hasValidObjective(getPropID(item.prop));
           } else {
             hasObj = true;
@@ -540,9 +634,9 @@ void renderConsole() {
       hasObj = hasValidObjective(verbId);
     }
 
-    // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 text
+    // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 dialogue
     // は変更しない。
-    std::string itemText = expandTextPlaceholders(displayList[i].text);
+    std::string itemText = expandTextPlaceholders(displayList[i].dialogue);
     if (!hasObj) {
       itemText = "[" + itemText + "]";
     }
@@ -568,9 +662,9 @@ void renderConsole() {
       }
     } else {
       for (size_t j = 0; j < objectiveList.size(); ++j) {
-        // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 text
+        // 表示直前に %(変数名) をその時点の変数値へ展開する。格納 dialogue
         // は変更しない。
-        std::string objText = expandTextPlaceholders(objectiveList[j].text);
+        std::string objText = expandTextPlaceholders(objectiveList[j].dialogue);
         if (objText.empty()) {
           objText = "[空]";
         }
@@ -630,7 +724,7 @@ void rebuildContainerC() {
     if (cond1 && cond2 && cond3 && cond4 && cond5 && cond6 && cond7 && cond8) {
       containerC.push_back(item);
       // 子にdummyがいたら、最優先で処理される。
-      if (item.text == "dummy") {
+      if (item.dialogue == "dummy") {
         if (hasPropTimerTarget(item.prop)) {
           uint8_t timerId = getPropTimerTargetId(item.prop);
           resetTimer(timerId);
@@ -689,7 +783,7 @@ void rebuildObjectiveList() {
   if (verbChild) {
     for (const auto &item : containerB) {
       if (getPropID(item.prop) == verbChild) {
-        if (item.text == "dummy") {
+        if (item.dialogue == "dummy") {
           verbId = getPropID(item.prop);
         } else {
           objectiveList.push_back(item);
@@ -731,7 +825,7 @@ void rebuildObjectiveList() {
       if (cond1 && cond2 && cond3 && cond4 && cond5 && cond6 && cond7 &&
           cond8) {
         // dummyがいたら、dummyを親にしてやりなおし。
-        if (item.text == "dummy") {
+        if (item.dialogue == "dummy") {
           if (hasPropTimerTarget(item.prop)) {
             uint8_t timerId = getPropTimerTargetId(item.prop);
             resetTimer(timerId);
@@ -927,7 +1021,7 @@ void sendProperty() {
   if (child) {
     for (const auto &item : containerB) {
       if (getPropID(item.prop) == child) {
-        if (item.text == "dummy") {
+        if (item.dialogue == "dummy") {
           gParent = getPropID(item.prop);
         } else {
           containerC.clear();
@@ -949,7 +1043,7 @@ void sendProperty() {
   // Even if not isOnetime, mark as hasRead but always stream.
   // if (isOnetime) {
   for (auto &item : containerA) {
-    if (item.text == selected.text && item.prop == selected.prop) {
+    if (item.dialogue == selected.dialogue && item.prop == selected.prop) {
       item.prop |= (1ULL << 16); // hasRead (bit 16)
       break;
     }
@@ -1314,11 +1408,11 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
   std::ofstream ofs("../dd.txt");
   if (ofs.is_open()) {
     for (auto item : containerA) {
-      if (item.text != "dummy") {
+      if (item.dialogue != "dummy") {
         item.prop &= ~(1ULL << 16); // clear hasRead (bit 16)
       }
 
-      ofs << "'" << item.text << "', '0x" << std::hex << std::setw(16)
+      ofs << "'" << item.dialogue << "', '0x" << std::hex << std::setw(16)
           << std::setfill('0') << item.prop << "',\n";
     }
     ofs.close();
@@ -1329,62 +1423,3 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
   if (gWindow)
     SDL_DestroyWindow(gWindow);
 }
-/*
-### 役所の札ギミック
-- 役所のギミックは札のギミック。
-- 札の番号によって、話せる役人が異なる。
-- 偶数と奇数、素数によって挙動が変わる。
-- 札の番号はおそらくシステム上のtickを使うとよいだろう。
-- gTickのような変数を用意するのがいいと思う。
-
-### 商館の見回りギミック
-- 商館では階段を見回る係の者がおり、そいつに止められてしまう。
-- しかし、どうしてかときたまそいつは持ち場を離れるので、
-- その隙に階段を登ってしまおう。
-- 持ち場を離れて2tickごとぐらいに戻ってくるぞ。
-
-### 同意形成ゲーム
-- このフロアでは、見ることで話し声が聞こえる。
-- 連続で見ると声をひそめられる。
-- 3回までなら、聞ける。あとはよく聞こえない。
-- 立食パーティ風にお茶を渡して、交渉、ナンパ。
-- 見るコマンドで事情を推察し、実際に話すコマンドで話す、お茶を渡す。
-- 交渉を成立させていく。
-- 3回交渉成立で、ショーメイ成功。拍手しながら階段を降りてくる。
--
-
----
-
-### アイデア
-見回りギミックをクリアして、2階へ。
-2階でのギミックは？
-コマンド成立前に、たくさんひっかけする。
-同意形成ゲームで、交渉以外にナンパのギミックも考える。
-
----
-
-### やること
-- 札を取得した時、その時の札番号を保持し、examineする。
-    - 札を取る07
-    - 札番号を返す。
-    - 札スロットに札番号を保存する。
-    - N番だ。
-    -
-
-- カスタムファンクションクラスタ、Sceneごとに違う関数クラスタをbaseのmain
-loopに挿入する。
-- ファンクションクラスタ内にもddを設置する。
-- ファンクションドリブンのdialogue.
-- DialogueDataの拡張機能。かゆいところに手が届く機能。DDMを最大限活かす機能。
-
----
-
-### プロンプト下書き
-次の指示を出すプロンプトを出力してほしい。
-**指示**
-移動するコマンドを実装してほしい。
-作業に際しては/home/herb1s/Projects/NEELA/DDMEditor/main.cpp,
-/home/herb1s/Projects/NEELA/DDMEditor/dd.txtの2ファイルのみ読み込みしてよい、書き込みは前者のmain.cppのみに限る。
-*      ____         _________
-* ____|   |________|        |________ 不規則なパルス
-*/
