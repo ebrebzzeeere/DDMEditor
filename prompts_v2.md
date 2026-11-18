@@ -1,4 +1,4 @@
-# DDMEditor GUI プロンプト v2（Prompt5 完了・Prompt 6 実行準備版）
+# DDMEditor GUI プロンプト v2（Prompt 6 完了・最終安定版）
 
 セッション1が出力した Prompt1〜Prompt6 のうち、**Prompt1 はセッション2で main.cpp に反映済み**、
 **Prompt2（family viewer）は session-42e6def2 で実装・実機検証済み**（2026-11-17、selftest 全 phase pass・exit=0）、
@@ -11,13 +11,19 @@ round-trip EXACT 維持・data.txt 不変）。**Prompt5（props menu / slot opt
 selftest の props phase の残り fail を修正して完遂・実機検証済み**です（selftest の selection / family /
 constraint / editor / **props** / font 全 phase pass・`props_phase_all_flags=1`・exit=0・
 round-trip EXACT 維持（props phase 後の MISMATCH も undo 修正で EXACT に復旧）・data.txt 不変）。
-そのため Prompt6 は「新規実装」ではなく「既存 codebase（Prompt 2〜Prompt 5 の実装を含む）への統合・最終安定化」の
-指示です。**次回予定されている実行は Prompt 6（統合・round-trip 検証・最終安定化 + ゲームモード共存）**です。
-本ドキュメントは Prompt 5 実行の結果を踏まえ、Prompt 6 の前提・共通制約・§3 の step 見積を現行 main.cpp の
-実済状態に合わせて更新した準備版です。
+**Prompt 6（統合・round-trip 検証・最終安定化 + ゲームモード共存）は 2026-11-18 の本セッション（同 repo）で
+実装・実機検証済みです**（selftest の全 phase — round-trip baseline / selection / family layout / constraint edges /
+editor add / props edit / undo / font / palette audit / game-mode switch / data unchanged — pass・FAIL 0・exit=0・
+`SELFTEST: ALL PHASES PASS`・round-trip EXACT（final）・data.txt 不変（4687B・md5 e2074fdc…・2回実行で同一）。
+DDM_MODE=game 起動でも selftest は viewer に復帰して全 phase pass・game 分岐と H 往復は game-mode phase で確認）。
+そのため Prompt1〜Prompt6 の実装・検証はすべて完了し、現行 main.cpp が最終安定状態です。
+本ドキュメントは Prompt 6 実行の結果を踏まえ、§1 に最終状態（各 phase の pass・実測色・WCAG・game-mode の動作）を
+反映し、§3 の step 見積を完了・最終状態に更新した最終版です。以後の追フィードバックは §2 の共通制約（v2.4）を
+前提に新しいプロンプトとして追加する（Prompt1〜6 は履歴として保持・再実行しない）。
 **Prompt 4 以降のプロンプトには「セッション終了後（selftest の結果確定後）に ./prompts_v2.md の結果節・次プロンプトの
 前提・step 見積を更新する」指示を出力形式に挿入済みです**（write は main.cpp のみ、prompts_v2.md の更新は
-セッション終了後の追動作、data.txt は書き換えない）。
+セッション終了後の追動作、data.txt は書き換えない）。Prompt 6 の更新指示も実行済み（本節・§1 の Prompt 6 結果節・
+§3 の最終状態更新）。
 
 ---
 
@@ -37,7 +43,8 @@ panel open 時だけ遮断・1-4/V/P/X/E/R/D/L/0/[ ]/矢印/Q は共通経路の
 panel を閉じる・props は idle のときだけ開くので add flow と同時状態にならない）**） |
 | EDITOR add | **実装済み（Prompt 4）**。`EditorState`（gAppMode と別 state・stage machine: idle→dialogue→quote→onetime→parent→child→commit）, `nextFreeId(scene)`（nodesInScene の使用 id と衝突しない最小 id・>=1・>0xFF 不可は -1）, `composeEditorProp`（buildProperty と同じ bit 配置 + slot1 child value・child なしは index0/value0 の data.txt 慣習）, `editorValidateAdd`（空 dialogue / 自己 parent / 別 scene の parent / child option の present チェック・invalid は追加禁止）, `editorCommitAdd`（正格式の RawLine + dirty=true の ElementRecord を末尾に追加 → `buildGraph` 再構築 → `applyActiveLayout` → 新ノードを selectedNode、新ノードは (scene,id) で決定的に findNode、新 id は commit 後の nextFreeId で連続追加でも重複しない）, `editorCancelAdd`（ESC・Document 不変）, `editorRestoreToBaseline`（selftest 検証後の baseline 復元・terminator patch 復元）, `drawEditorOverlay` の preview panel（id/parent/child/scene/flags/slot1Index/slot1 value/final prop hex/追加 raw line の予定/baseline 行数→document 行数/candidate ids 列挙・kMC の色: sky=進行 / text=dialogue / subtext=値 / green=commit ready / yellow=warning）, runtime 同期トグル `G`（既定 off・on のとき commit で containerA/B に反映・legacy write-back 経路は触らない）, editor phase selftest（期待値は実行時 prop 直接パース） |
 | EDITOR props | **実装済み（Prompt 5・session-213fbdb3 中断→継続セッションで完遂）**。書き込み helper（`setPropBit`/`clearPropBits`/`setPropField`・`setSlotIndex`/`setSlotValue`・合成は read helpers の逆 bit 配置に厳密一致・`editTimerSetterValue`/`editTimerTargetValue`/`editEyelevelToggleValue` は sub-bit だけ編集し vacant 他 bit を保持）、`PropsFieldDef`/`kPropsFields`（22 fields・表示順 = tabs/sections: basic flags → id/parent/scene → slot0..3）、`propsOptionLabel`（value 0 は none・data.txt 慣習）、`PropsEditState gProps`（nodeKey・cursor・baseSlotIndex・undo stack・warningTotal・`kPropsUndoMax=64`）、ノード選択（クリック・右クリック・editor idle のみ・add flow と排他）で panel を開く、キー `TAB`=次項目（循環）・`ENTER`/`SPACE`=トグル（bool 反転・option cycle は最後の次は none=元 index+value 0・enum cycle・uint 最低 bit 反転）・`+/-`=値（clamp）・`Y/N`・`U`=undo・`G`=graph 再構築のみ・`ESC`=panel 閉（選択解除より優先）、`propsCommit`（undo entry 積む → prop 更新 + dirty=true + 正格式 raw line 再生成 → `buildGraph` → `applyActiveLayout` → 選択を編集後の (scene,id) で復元 → fit → `gRoundTrip` 更新・runtime 同期なし）、`propsValidateEdit`（範囲外 clamp + warning・現 scene の duplicate id は reject・id 系 target 不在は warning + constraint の ghost で確認・option 非立ての timer/eyelevel sub field 編集は inert warning）、`describeElement` の EDITOR variant（props 表示・他 view の出力順不変）、HUD の props 行・凡例、`propsUndo`（現在の nodeKey で対象 record を解決 → prop・line text・dirty を完全復元 → 再構築 → nodeKey/選択を prevProp の key へ）、props phase selftest（期待値はすべて実行時計算） |
-| **未実装（後フェーズ hook）** | timer/unlock/eyelevel の制約 edge 可視化は未実装（Prompt 3 の default 範囲・必要なら Prompt 6 以降で drawConstraintView に kMC の別意味色で追加）。dialogue の編集は未実装（props panel は dialogue を編集しない・別 panel）。runtime の id 採番 `containerB.size()+1` はそのまま（editor add は `nextFreeId` を使う） |
+| GAME 共存 / write policy / 最終安定化 | **実装済み（Prompt 6・本セッション 2026-11-18）**。`UiMode gUiMode`（UI_VIEWER/UI_GAME・既定 viewer・起動は `DDM_MODE=viewer|game`）+ H キーで `setUiMode`（game 離脱時に editorLeaveModeIfNeeded/propsClose・text input 対称）、SDL_AppIterate の game 分岐（renderConsole のみ・graph/HUD を描かない・viewer では drawGraphOverlay→drawHud の順序維持）、`gBackupOnQuit`（既定 off・B トグル・quit の backupData は on のときのみ ../data.txt.bak）、legacy write-back の状態を HUD に明示。selftest は `gSelftestFailures`/`stFail`/`stPass` で FAIL 集約し失敗は "FAIL <phase>" + SDL_APP_FAILURE、全 pass で `SELFTEST: ALL PHASES PASS` + exit=0。round-trip baseline 強化（terminator 復元・正格式往復・load-time prop/dummy/hasRead 保持）、family に構造 edge 照合（parent/child の present/dangling・矛盾 count・prop 直接パース）、props panel の scene 切替生存、editor の runtime 遮断/挿入 flow 対称、`kPropsUndoMax` 64→256、palette 監査（数値リテラル zero・RGBA32/RGB24・SDL_RenderDebugText は fallback のみ・WCAG を pixel readback の実色で実測・全 face ≥4.5）、game-mode switch / data unchanged phase、mode 別 frame の保存（general/family/constraint/editor/props/game/palette）。tint 定数は `mcBlendTint` で kMC から導出（値は旧 0x383039/0x2e363c と同一・readback で実色一致） |
+| **未実装（後フェーズ hook）** | timer/unlock/eyelevel の制約 edge 可視化は未実装（Prompt 3 の default 範囲・Prompt 6 でも未追加・必要なら追フィードバックで drawConstraintView に kMC の別意味色で追加）。dialogue の編集は未実装（props panel は dialogue を編集しない・別 panel）。runtime の id 採番 `containerB.size()+1` はそのまま（editor add は `nextFreeId` を使う） |
 | 日本語描画 | 実装済み。FreeType を `dlopen`、フォント探索(`DDM_FONT_PATH` 上書き可)、`guiGlyph` の texture cache、`drawGuiText`/`drawGuiLine` が唯一のテキスト描画経路、freetype/日本語フォントが無い環境のみ ASCII `?` fallback(`asciiPreview`) |
 | 配色 | **Catppuccin Mocha 準拠**。`kMCBase/kMCMantle/kMCText/kMCSubtext1/kMCSubtext0/kMCOverlay2/1/0/kMCSurface0/1/kMCRed/Green/Yellow/Peach/Mauve/Teal/Sky/Sapphire/Blue/Lavender` + `mcR/mcG/mcB` + `setSolid(r, uint32_t hex)` + tint fill(`kMCFillTemplate/kMCFillEmpty`)。数値 RGB リテラルは全排除済み。Prompt 3 で constraint 色は kMCTeal/kMCRed/kMCYellow の定数使用（意味体系: required/excluded slot1/excluded slot2）。コントラスト実測値: dialogue `#cdd6f4` on surface0 = 8.69:1, HUD 見出し 12.14:1, badge 8.08:1, flags 4.45:1 |
 | 検証基盤 | 実装済み。`DDM_SELFTEST=1` + `SDL_VIDEO_DRIVER=dummy` で round-trip / export / selection+zoom/pan 往復 / glyph rasterize / 実描画→`SDL_RenderReadPixels`→`build/viewer_frame.bmp` / bright pixel ヒストグラム / `switchScene(+1)` を stdout に出力。**Prompt 2 で family phase・Prompt 3 で constraint phase・Prompt 4 で editor phase 追加済み**: editor は各 scene の nextFreeId 一致（使用 id 集合との衝突チェック）・空 dialogue 拒否・ESC 取消で Document 不変・追加行の正格式/再パース/child なしは getPropChild()==0・graph nodes/edges/roots の差分・family/constraint への出現（追加行の合成 prop を含む期待値で照合）・RoundTripReport の added/edited・runtime 同期 off・検証後の baseline 復元（EXACT）をすべて実行時計算の期待値で照合する。**Prompt 5 で props phase 追加済み**: helpers 往復（全 fields・各 option 1回）・timer/eyelevel の合成・分解一致・
@@ -347,18 +354,47 @@ key 1 で general 復帰・panel 閉・state cleared=1・`props_phase_all_flags=
 - **anonymous namespace と forward decl**: props の forward decl を namespace 内・定義を global に置くと別物扱いで
   undefined symbol（中断セッションで判明・decl を namespace 外へ移動して解決）。props 関数群は global 側にある。
 
+### Prompt 6 実行（本セッション・2026-11-18）の結果 — 現行 main.cpp に追加済み（最終安定状態）
+
+条件どおりに完遂（write は main.cpp のみ + セッション終了後の prompts_v2.md 更新・data.txt 書かない〔2回実行で 4687B・md5 e2074fdc… 不変〕・kMC 定数のみ・drawGuiLine 経由・新ファイルなし・既存 runtime 入力不変・起動既定は現行動作）。現行 main.cpp の該当位置（**identifier で探すこと**）:
+- Prompt 6 state（要件 1 のアーキテクチャ map コメントを含む）: `UiMode gUiMode`/`gBackupOnQuit`/`gLoadedBytes`/`gSelftestFailures` + `stFail`/`stPass` は `PropsEditState gProps;` の直後（anonymous namespace・表示ヘルパーの直前）。
+- パレット: `mcBlendTint` + `kMCFillTemplate/kMCFillEmpty` の導出（旧リテラルと同一値・selftest の face pixel で実色一致）と `wcagLuminance`/`wcagContrast` は kMC 定数定義（mcR/mcG/mcB・setSolid）の直後。
+- `setUiMode` は SDL_AppInit の直後・SDL_AppEvent の直前。SDL_AppInit は `DDM_MODE` を読み ui mode を出力し、load 後に `gLoadedBytes` を保存。SDL_AppEvent: H（viewer/game 切替・game では editorMode=false で runtime キーそのまま）・B（backup トグル）、graph keys / editor・props GUI / pointer / editor TEXT_INPUT は viewerUi ガード。SDL_AppIterate: console emit の直後に game 分岐（描画しない）、viewer では描画経路そのまま。SDL_AppQuit: backup は gBackupOnQuit on のときのみ・off 時は旨を stdout に出力。
+- drawHud legend: ui=viewer・H/B 案内・write policy/legacy write-back 状態・backup 状態・統合後の実装状態行（general/constraint の legend 更新）。
+- selftest（順序: round-trip baseline → selection → family → constraint → editor → props → font → palette audit → game-mode → switchScene(+1) → data unchanged → 最終集約）: `=== [ selftest round-trip baseline ] ===`（baseline EXACT・`terminator_preserved`・`canonical_format` 正格式往復・`load_time_props_preserved`）、selection/family/constraint の既存 flag を `stPass(..., "selection"/"family layout"/"constraint edges")` で FAIL 集約に格上げ、family に `structure_edges`（parent/child の present/dangling・矛盾 count・first-wins の prop 直接パース期待値）と family frame PASS（sapphire/peach/矛盾 yellow/text/subtext1・矛盾 child edge は yellow で描く Prompt 2 意味体系に合わせた期待値）、editor に `editor_runtime_key_blocked`/`insert_flow_symmetry`（runtime 遮断・console 挿入 flow の Start/Stop 対称）を editorAllOk に含め `stPass(..., "editor add")`、props に `props_panel_survives_scene_switch`・undo は "undo" phase として別集約（`undo_limit=256` headroom 照合）・propsAllOk は `stPass(..., "props edit")`、font は glyph rasterize + general frame PASS（`build/viewer_frame_general.bmp` に mode 別 frame としても保存）、`=== [ selftest palette audit ] ===`（./main.cpp を読み line comment を除くソーススキャン・`numeric_rgb_literals_outside_kmc_defs=0`・fallback-only・RGBA32・RGB24・合成 band を描いて face 色を実 pixel・text/subtext1 をヒストグラムで確認し `wcag` を実測・`build/viewer_frame_palette.bmp`）、`=== [ selftest game-mode ] ===`（H 往復・game frame bright=0・graph/HUD 実色 0・`build/viewer_frame_game.bmp`・console の TAB→ESC 挿入 flow・viewer 復帰・描画復元）、`=== [ selftest data unchanged ] ===`（disk bytes == gLoadedBytes == Document.raw・round-trip final EXACT・write policy/backup 状態）、最終で `FAIL <phase>` を出力し SDL_APP_FAILURE / 全 pass で `SELFTEST: ALL PHASES PASS` + SDL_APP_SUCCESS。selftest 冒頭で UI_GAME の起動（DDM_MODE=game）は viewer に復帰する（要件 7「DDM_SELFTEST は viewer 検証に集中」）。
+- `kPropsUndoMax` は 64→256（Prompt 5 の観測「stack が満杯だと全 undo で baseline に戻らない」対策・selftest は 55 entry で headroom=1）。
+
+実測結果（本セッション・2026-11-18・data.txt 4687B/md5 e2074fdc… 不変・2回実行で同一・build warning 0・stdout は実行間で安定）:
+- 全 phase pass・**FAIL 0・exit=0**・`round_trip_final=EXACT OK`・`data_unchanged match=1`・`SELFTEST: ALL PHASES PASS`。既存の `editor_phase_all_flags=1`・`props_phase_all_flags=1`・全 undo 復元 exact=1・各 phase の round-trip EXACT 維持は従来どおり（FAIL 集約に組み込み済み）。
+- round-trip baseline 強化: terminator 復元 match=1（crlf=0・unterminated=0・lines の連結 == raw）・正格式往復 match=1（'0x'・lowercase16・trailing comma）・load-time prop 保持 match=1（現行 data.txt の hasRead=0・dummy 非 0 prop 2 件は原値のまま）。
+- 構造 edge 区別: parent present=46/46・dangling=36/36・child present=2/2・dangling=0/0・矛盾=2/2（全 match・first-wins 期待値）。family frame PASS ok=1（sapphire 839/20・矛盾 yellow 704/2・child_peach 0/0 — capture scene 0x1 の child edge 2 件はすべて矛盾 edge で、矛盾は yellow で描く仕様どおり・peach 実色要求は矛盾なし child edge のときのみ）。general frame PASS ok=1（bright=60868・sapphire=1885/20・peach=575/2・text/subtext1 実色）。constraint totals required=11/excluded=0・teal PASS・`excluded_edges=0 (none in data.txt)` info・全往復 intact・selection kept は従来どおり全 match。
+- editor/props 統合: `editor_runtime_key_blocked=1 insert_flow_symmetry=1`・`props_panel_survives_scene_switch ok=1`・undo 55 entry 完全復元・`undo_limit=256 headroom=1 ok=1`・validation warnings got=5 expected=5・props G 再構築 runtime 不変・ESC 選択保持。
+- palette audit: kMC 定数定義 23・数値 RGB リテラル（kMC 定義外・line comment 除く・6桁ちょうど）= 0・SDL_RenderDebugText code uses=1（`gGuiText.ready` の false 側のみ・guard 直下）・SDL_PIXELFORMAT_RGBA8888 code=0・RGBA32 texture=1・RGB24 readback=8。WCAG を pixel readback の実色で実測（observed_pixel=1・全 face ≥4.5）: base text 11.34 / subtext1 9.26・mantle 12.14 / 9.91・surface0 8.69 / 7.10・surface1 6.31 / 5.15・template tint 8.80 / 7.19・empty tint 8.50 / 6.94。tint 導出値は旧 0x383039 / 0x2e363c と一致（readback で実色確認）。
+- game-mode switch: 既定起動は viewer・`DDM_MODE=game` は game で起動（ui mode: game 出力・H で復帰可）・game では frame bright=0・graph/HUD 実色 0・console の挿入 flow（TAB→ESC・対称）そのまま・viewer 復帰で mode/scene/選択 state と描画（graph+HUD text 実色）が復元。`build/viewer_frame_game.bmp`。backup は既定 off・quit 時に off 旨を出力（B で on → ../data.txt.bak 上書き・./data.txt には書かない）。
+- mode 別 frame: build/viewer_frame_general/family/constraint/editor/props/game/palette.bmp（+ 従来の viewer_frame.bmp）保存・各 bright pixel と実色を stdout に報告（BMP 生バイトは BGR/bottom-up・ヒストグラムは RGB24 surface から）。
+
+観測差異・修正事項（そのまま記載）:
+- **初回実行で family frame が FAIL（1 phase・他全 pass）**：capture scene（0x1）の child edge 2 件はすべて矛盾 edge で、drawFamilyView は矛盾を yellow で描き peach は描かない（Prompt 2 の意味体系）。family frame PASS の期待値を「矛盾なし child edge のときのみ peach・矛盾は yellow の実色で照合」に修正して全 pass になった（矛盾 2/2・yellow 704）。general の drawGraphEdges は矛盾 child も peach で描く（general frame PASS で実色確認）。
+- **DDM_MODE=game で selftest を実行すると props phase で crash**（GUI キーが game で遮断され props target が解決されず vector[-1] アクセス）→ selftest 冒頭で UI_GAME のとき viewer に復帰する修正（要件 7 の「DDM_SELFTEST は viewer 検証に集中」に一致・game 動作は game-mode phase の H 往復で検証）。
+- キー追加: H（game/viewer 切替）、B（backup on quit・既定 off）。既存 runtime/GUI キー（1-4/V/P/X/E/R/D/L/0/+/-/[ ]/矢印/ESC/Q/TAB/F/O/I/A/U/M/Y/N/G/TAB…）と衝突なし（H/B は未使用）。game では graph GUI・editor/props・pointer を通さず、runtime キー・Q・挿入モードの ESC はそのまま動作。
+- backup の既定 off は従来動作（quit で常に ../data.txt.bak 上書き）の挙動変更（Prompt 6 要件 2 の「デフォルト off（トグル B）」を選択）。./data.txt 運用では legacy write-back は走らない（HUD に状態明示・data unchanged phase で確認）。../data.txt legacy 運用の write-back は従来どおり（load 元で分離）。
+- `kPropsUndoMax` 引き上げ（64→256）: 長時間編集でも「全 undo で baseline に戻る」が成立する運用を明示（selftest で headroom 照合）。
+- **セッション最終確認後に外部の legacy write-back で data.txt が変わる観測あり**（4687B → 4764B・この editor の write 経路は走っていない・./data.txt の viewer 運用では editor は data.txt に一切書かない）。変化後の再実行でも全 phase pass・exit=0・`data_unchanged match=1`（load 時の bytes を基準に実行中で照合）・round-trip EXACT（期待値はすべて実行時計算・ハードコード禁止の必須ルールが再現された。Prompt 3 の同名の観測と同じ）。
+
 ---
 
-## 2. 全プロンプト共通の制約（v2.3・Prompt6 で共通。Prompt2〜Prompt5 は完了済み）
+## 2. 全プロンプト共通の制約（v2.4・Prompt1〜6 は完了・最終状態。以後の追フィードバックは同じ共通制約で追加）
 
 ```text
-共通制約（Prompt6 で共通。Prompt2 は session-42e6def2、Prompt3 は 2026-11-17、Prompt4 は 2026-11-18、
-Prompt5 は session-213fbdb3・中断→継続セッションで 2026-11-18 に完遂済み）:
+共通制約（Prompt2 は session-42e6def2、Prompt3 は 2026-11-17、Prompt4 は 2026-11-18、
+Prompt5 は session-213fbdb3・中断→継続セッションで 2026-11-18 に完遂済み、Prompt6 は 2026-11-18 の
+本セッションで完遂済み・現行 main.cpp が最終安定状態。以後の追加作業もこの制約を継承する）:
 - ./main.cpp と ./data.txt のみ read してよい。write は ./main.cpp のみ許可する。
   ただし Prompt6 は、selftest の結果確定後（セッション終了後に） ./prompts_v2.md の
   「実行結果」節（最終状態）・§3 の step 見積の更新を許可する（プロンプトの出力形式に明記）。
-  （Prompt4・Prompt5 は完了済み・本ドキュメントの §1「Prompt 4 実行の結果」節・「Prompt 5 実行の結果」節と
-   Prompt 6 の前提・§3 は更新済み。）
+  （Prompt4・Prompt5・Prompt6 は完了済み・本ドキュメントの §1 に各実行結果節と Prompt 6 の最終状態節、
+   §3 の step 見積は完了・最終状態に更新済み。以後の追作業も同様に selftest 結果確定後の
+   prompts_v2.md 最終状態更新を追動作とする。）
   失敗があった場合も観測事実を記載する。data.txt は書き換えない（serialize は stdout / HUD export で提示する）。
 - data.txt は書き換えない。ゲーム側の legacy write-back で実行のたび内容が変わる環境があるため、
   検証の期待値は実行時に現行 gDocument の prop を直接パースして算出し、数値をハードコードしない
@@ -808,7 +844,12 @@ selectedNode の props editor を作り、parent/child 以外の全 prop fields 
 
 ---
 
-## Prompt 6 — 統合・round-trip 検証・最終安定化（+ ゲームモード共存）
+## Prompt 6 — 統合・round-trip 検証・最終安定化（+ ゲームモード共存） ✅ 完了
+
+本セッション（2026-11-18・DDMEditor repo・本ドキュメントの最終更新の実行）で実装・実機検証済み。結果は §1 の
+「Prompt 6 実行の結果」節参照（実測: 全 phase pass・FAIL 0・exit=0・round-trip EXACT（final）・data.txt 不変・
+game 共存（DDM_MODE/H）・WCAG 実測全 face ≥4.5・mode 別 frame 保存・本ドキュメント更新済み）。
+以下は履歴として保持（再実行しない）。
 
 ```text
 あなたは DDMEditor の GUI 拡張実装者です。
@@ -902,7 +943,7 @@ GUI 安定性・色・検証の最終安定化パッチを作る。
 
 ---
 
-## 3. ステップ見積もり（v2.3・Prompt1〜5 は完了、Prompt6 が次回予定）
+## 3. ステップ見積もり（v2.4・Prompt1〜6 は完了・最終状態。以後の追フィードバックは新しいプロンプトとして追加）
 
 | Session | 目的 | 現行コード上の作業 |
 |---|---|---|
@@ -911,4 +952,4 @@ GUI 安定性・色・検証の最終安定化パッチを作る。
 | 3 (Prompt3) | constraint viewer | **完了**（本セッション・2026-11-17: `drawConstraintView`（general への重畳・teal/red/yellow・中段ラベル・ghost 破線枠）+ `ConstraintEdgeCounts`/`countConstraintEdges` + `drawDashedRect` + describeElement constraint variant + HUD legend/counts + selftest constraint phase 全 pass・exit=0・round-trip EXACT 維持。§1 の Prompt 3 サマリ参照。本ドキュメントはこの更新で Prompt 4 準備版になった） |
 | 4 (Prompt4) | editor add | **完了**（2026-11-18: `EditorState`（別 state・stage machine）・`nextFreeId`・`composeEditorProp`・正格式追加 + dirty=true・`buildGraph` 再構築 + `applyActiveLayout` + 新ノード選択（(scene,id) findNode）・`drawEditorOverlay` preview・HUD editor 凡例・`G` runtime 同期トグル（既定 off）・`RoundTripReport` の baseline added/edited（verifyRoundTrip の行単位照合）・editor phase（期待値実行時計算）全 pass・`editor_phase_all_flags=1`・exit=0・data.txt 不変・本ドキュメント更新済み。§1 の Prompt 4 サマリ参照） |
 | 5 (Prompt5) | props menu | **完了**（session-213fbdb3・2026-11-18・turn が max-tokens で中断 → 継続セッションで完遂: 書き込みヘルパー `setPropBit`/`clearPropBits`/`setPropField`/`setSlotIndex`/`setSlotValue`（read helpers と逆の bit 配置に厳密一致・timer/eyelevel は sub-bit だけ編集・vacant 保持）・`PropsFieldDef`/`kPropsFields`（22 fields・tabs/sections 順）・`propsOptionLabel`（value 0 = none 慣習）・`PropsEditState gProps`（undo stack・上限 64）・ノード選択で panel を開く（add flow と排他・idle のみ）・キー TAB/ENTER・SPACE/+/−/Y/N/U/G/ESC（props 優先 routing）・`propsValidateEdit`（clamp + yellow warning・id duplicate reject・cross-scene target は warning + constraint の ghost で確認・option 非立て sub field は inert）・`propsCommit`（正格式再生成 + dirty=true + `buildGraph`/`applyActiveLayout` + (scene,id) 選択復元・runtime 同期なし）・`propsUndo`（現在の nodeKey で解決 → 復元 → key 更新・順序修正済み）・`describeElement` EDITOR variant・HUD props 行/凡例・selftest props phase（期待値実行時計算）全 flag pass・`props_phase_all_flags=1`・exit=0・`round_trip_after_props_phase=EXACT OK`・全 undo（55 entry）で baseline 完全復元 exact=1・data.txt 不変・本ドキュメント更新済み。§1 の Prompt 5 サマリ参照。観測差异: value byte と prop bits は別領域・compose-decode は別 flag・general dump の行 index・O6 の mask・undo の解決順序・undo stack 上限） |
-| 6 (Prompt6) | 統合・最終検証・ゲームモード共存 | **次回予定**。selftest の既存 phase（round-trip/selection/family/constraint/editor/props・flags は `editor_phase_all_flags`/`props_phase_all_flags` 含む）を FAIL 検知に格上げ（"FAIL <phase>" + SDL_APP_FAILURE）、palette/game-mode の新規 phase 追加（既存の「期待値実行時計算」pattern 踏襲・数をハードコードしない）、write policy・backupData トグル、palette 監査（kMC 由来・数値リテラル zero）、mode 共存 / セッション終了後に prompts_v2.md 最終更新（§1 に最終状態を反映・write は main.cpp と prompts_v2.md のみ） |
+| 6 (Prompt6) | 統合・最終検証・ゲームモード共存 | **完了**（本セッション・2026-11-18: アーキテクチャ map（§1 の GAME 共存 / write policy / 最終安定化行）・round-trip baseline 強化（terminator 復元・正格式往復・load-time prop/dummy/hasRead 保持）・既存 phase（round-trip/selection/family/constraint/editor/props/undo・flags は `editor_phase_all_flags`/`props_phase_all_flags` 含む）の FAIL 検知格上げ（失敗は `FAIL <phase>` + SDL_APP_FAILURE・全 pass で `SELFTEST: ALL PHASES PASS` + exit=0）・統合 flag（family 構造 edge 区別と矛盾 yellow・general/constraint/family frame PASS・`props_panel_survives_scene_switch`・`editor_runtime_key_blocked`/`insert_flow_symmetry`・undo 上限 256 headroom）・palette 監査（kMC 由来・数値リテラル zero・RGBA32/RGB24・SDL_RenderDebugText fallback のみ・WCAG を pixel readback の実色で実測・全 face ≥4.5）・game モード共存（DDM_MODE=viewer/game・H トグル・game は console のみ・game frame 実色 0・runtime そのまま・selftest は viewer 復帰）・write policy（backup 既定 off・B・legacy write-back 状態明示・data.txt 不変・4687B/md5 e2074fdc…・2回実行同一）・mode 別 frame（general/family/constraint/editor/props/game/palette）保存・本ドキュメント最終更新済み。全 phase pass・FAIL 0・exit=0・round-trip EXACT・build warning 0。§1 の「Prompt 6 実行の結果」節参照・観測差異（family frame の矛盾 yellow 期待値修正・DDM_MODE=game selftest の viewer 復帰・backup 既定 off の挙動変更）も同節に記載） |

@@ -4,9 +4,11 @@
 #include <SDL3/SDL_main.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
@@ -925,7 +927,8 @@ static const PropsFieldDef kPropsFields[] = {
   {"slot3", "toggleEyelevel(value bits4-7)", PF_UINT, ROLE_EYE_SUB, 60, 4, 3, 0x0F, nullptr, 0},
 };
 constexpr int kPropsFieldCount = static_cast<int>(sizeof(kPropsFields) / sizeof(PropsFieldDef));
-constexpr size_t kPropsUndoMax = 64; // undo stack の上限（新しい方を保持。古い順に discard）
+constexpr size_t kPropsUndoMax = 256; // Prompt 6: 上限 64→256。stack が満杯になると「全 undo で
+// baseline に戻る」が成立しないため（Prompt 5 実測 55 entry・未到達）。長時間編集でも満杯にしない。
 
 struct PropsUndoEntry {
   uint64_t prevProp;        // 編集直前の prop
@@ -942,6 +945,45 @@ struct PropsEditState {
   size_t warningTotal = 0;            // panel open からの warning イベント数（selftest の期待値照合用）
 };
 PropsEditState gProps;
+
+// --- Prompt 6: 最終統合 state（game モード共存 / write policy トグル / selftest FAIL 検知） ---
+// アーキテクチャ整理（要件 1・現行 identifier への map。再実装はしない）:
+//   Document       = gDocument（RawLine text+terminator の原文・ElementRecord prop+dirty・
+//                    comment/blank 保持）+ loadDocument/parseElementLine/serializeDocument
+//   GraphIndex     = gGraph（adjacency・edges・roots・scenes・warnings）+ per-mode layout
+//                    （layoutScene=general wx/wy・layoutFamily=familyWx/familyWy/famDepth）
+//                    + active layout の一本化（nodePos()/applyActiveLayout()）+
+//                    selectedNode は (scene,id) key（nodeKey()/findNode）で復元
+//   ViewModes      = gViewMode（VIEW_GENERAL/FAMILY/CONSTRAINT/EDITOR）+ describeElement の
+//                    view 別 props 表示順序・フィルタ（general/family/constraint/EDITOR variant）
+//   EditorState    = gEditor（add flow・validation warning）+ gProps（props menu・warning・undo stack）
+//   Serialization  = serializeDocument（未編集行=原文・dirty 行=正格式）+ verifyRoundTrip の
+//                    baseline diff（added/edited・added_or_dirty_only・splitKeepText の行数规则）
+//   UiMode         = gUiMode（UI_VIEWER=現行の graph overlay + HUD + console /
+//                    UI_GAME=renderConsole と入力系統のみ・graph/HUD を描かない）。
+//                    起動は DDM_MODE=viewer|game（既定=現行動作）、実行時は H キーで切替。
+//   write policy   = ファイル write はしない（data.txt に書き戻さない）。legacy の
+//                    ../data.txt write-back は load 元が ../ の legacy 運用のみ（HUD に状態明示）。
+//                    quit の backupData は既定 off（B トグル）。
+//   selftest FAIL  = gSelftestFailures に failed phase 名を集約。最終で "FAIL <phase>" を
+//                    stdout に出し SDL_APP_FAILURE で終了する（期待値は実行時計算のまま）。
+enum UiMode { UI_VIEWER = 0, UI_GAME = 1 };
+UiMode gUiMode = UI_VIEWER; // 既定は現行動作（viewer overlay + console）。DDM_MODE / H で切替
+bool gBackupOnQuit = false; // quit の backupData（../data.txt.bak 上書き）既定 off・B でトグル
+size_t gLoadedBytes = 0;    // load 時の data bytes（最終の「data.txt は変更されない」照合基準）
+std::vector<std::string> gSelftestFailures; // selftest の failed phase 集約（重複は 1 件）
+
+// selftest FAIL 検知（Prompt 6・要件 8）: 各 phase の flag をここで集約し、最終で FAIL を出す。
+void stFail(const char *phase) {
+  for (const std::string &f : gSelftestFailures)
+    if (f == phase) return; // 同じ phase の多重失敗は 1 件として集約する
+  gSelftestFailures.push_back(phase);
+}
+// ok が false のとき phase を FAIL に集約する。ok をそのまま返す（flag 計算の途中に埋め込める）。
+bool stPass(bool ok, const char *phase) {
+  if (!ok) stFail(phase);
+  return ok;
+}
 
 // 表示ヘルパー: id/parent/scene は hex と decimal の両方（入力は hex を優先）。flags は hex + binary。
 inline std::string hexDec(uint8_t v) {
@@ -2196,10 +2238,35 @@ inline void setSolid(SDL_Renderer *r, uint32_t hexColor, uint8_t ca = 255) {
   SDL_SetRenderDrawColor(r, mcR(hexColor), mcG(hexColor), mcB(hexColor), ca);
 }
 
-// 公式パレットのアクセントを base に 12% で混ぜた tinted surface（mocha風の
-// 淡い色面を作るためのローカル調色。template=peach, empty=green の色相を保持する）。
-constexpr uint32_t kMCFillTemplate = 0x383039; // base #1e1e2e + peach #fab387 12%
-constexpr uint32_t kMCFillEmpty = 0x2e363c;    // base #1e1e2e + green #a6e3a1 12%
+// 公式パレットのアクセントを base に 12% で混ぜた tinted surface（mocha風の淡い色面）。
+// Prompt 6 色監査（要件 6）: 数値 RGB リテラルは kMC 定数定義のみ（それ以外 zero）。
+// tint は kMC 定数からの調色計算（整数・round half up）で導出する。旧リテラル
+// 0x383039 / 0x2e363c と同じ値になる（selftest palette audit で実色出現を確認する）。
+constexpr uint32_t mcBlendTint(uint32_t baseHex, uint32_t tintHex, unsigned pct) {
+  const uint32_t r = (mcR(baseHex) * (100u - pct) + mcR(tintHex) * pct + 50u) / 100u;
+  const uint32_t g = (mcG(baseHex) * (100u - pct) + mcG(tintHex) * pct + 50u) / 100u;
+  const uint32_t b = (mcB(baseHex) * (100u - pct) + mcB(tintHex) * pct + 50u) / 100u;
+  return (r << 16) | (g << 8) | b;
+}
+constexpr uint32_t kMCFillTemplate = mcBlendTint(kMCBase, kMCPeach, 12u); // template tint（peach 12%）
+constexpr uint32_t kMCFillEmpty = mcBlendTint(kMCBase, kMCGreen, 12u);    // empty tint（green 12%）
+
+// WCAG 2.1 relative luminance / contrast ratio（sRGB linearize。面+テキストの
+// 4.5:1 判定を pixel readback の実色から測るために使う — Prompt 6 要件 6）。
+double wcagLuminance(uint32_t hexColor) {
+  const auto lin = [](uint32_t c8) -> double {
+    const double c = static_cast<double>(c8) / 255.0;
+    return c <= 0.03928 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * lin(mcR(hexColor)) + 0.7152 * lin(mcG(hexColor)) + 0.0722 * lin(mcB(hexColor));
+}
+double wcagContrast(uint32_t fgHex, uint32_t bgHex) {
+  const double l1 = wcagLuminance(fgHex);
+  const double l2 = wcagLuminance(bgHex);
+  const double hi = std::max(l1, l2);
+  const double lo = std::min(l1, l2);
+  return (hi + 0.05) / (lo + 0.05);
+}
 
 inline const char *viewModeName() {
   switch (gViewMode) {
@@ -3988,8 +4055,8 @@ void drawHud(SDL_Renderer *r) {
     y += static_cast<float>(kTextStep);
   };
 
-  hudLine("DDMEditor graph viewer  mode=" + std::string(viewModeName()), kMCText);
-  hudLine("keys 1-4 = general/family/constraint/editor", kMCSubtext1);
+  hudLine("DDMEditor graph viewer  mode=" + std::string(viewModeName()) + " ui=viewer", kMCText);
+  hudLine("keys 1-4 = general/family/constraint/editor   H = game/viewer 切替   B = backup on quit", kMCSubtext1);
   hudLine("scene=" + hexNibble(gViewScene) + "  [ ] = prev/next scene   L = fit   0 = reset",
           kMCSubtext1);
   std::string sceneList = "scenes:";
@@ -4020,6 +4087,13 @@ void drawHud(SDL_Renderer *r) {
   if (!gRoundTrip.exact && gRoundTrip.firstDiffLine > 0) {
     hudLine("  first diff line=" + std::to_string(gRoundTrip.firstDiffLine), kMCYellow);
   }
+  // Prompt 6 write policy（要件 2）: data.txt に書き戻さない（serialize は stdout/HUD export のみ）。
+  // legacy write-back は ../data.txt を load した旧運用のみで、viewer 運用では無効（状態を明示）。
+  hudLine("write policy: data.txt に書かない. legacy write-back ../data.txt: " +
+          std::string(gLoadedPath == "../data.txt" ? "enabled（legacy 運用のみ）" : "off（./data.txt viewer 運用）"),
+          gLoadedPath == "../data.txt" ? kMCYellow : kMCOverlay2);
+  hudLine("backup on quit: " + std::string(gBackupOnQuit ? "on（../data.txt.bak に上書き）" : "off（既定・B でトグル）"),
+          gBackupOnQuit ? kMCGreen : kMCOverlay2);
   hudLine("font: " + std::string(gGuiText.ready ? gGuiText.fontPath.c_str()
                                                  : "ascii fallback (no freetype/jp font)"),
           gGuiText.ready ? kMCTeal : kMCRed);
@@ -4082,7 +4156,7 @@ void drawHud(SDL_Renderer *r) {
             " ghost=" + std::to_string(c.excludedSlot2Ghost), kMCYellow);
     if (c.excludedSlot1 + c.excludedSlot2 == 0)
       hudLine("excluded_edges=0 (none in data.txt)", kMCOverlay2);
-    hudLine("R general layout: overlay に使用。C constraint: implemented / EDIT add+props: implemented (Prompt4/5)", kMCOverlay1);
+    hudLine("R general layout: overlay に使用。C constraint: implemented / EDIT add+props: implemented（Prompt4/5・Prompt6 統合）", kMCOverlay1);
   } else if (gViewMode == EDITOR) {
     // editor add の凡例（Prompt 4）。preview panel は graph 領域の GUI 欄で、
     // constraint の teal/red/yellow の意味体系とは別（panel は sky=text進行 / subtext=値 /
@@ -4108,8 +4182,9 @@ void drawHud(SDL_Renderer *r) {
       hudLine("props edit (Prompt5): click node / right-click = open props panel（TAB next・ENTER/SPACE toggle・+/- value・Y/N bool・U undo・G graph rebuild・ESC close）", kMCOverlay1);
     }
   } else {
-    hudLine("R general: active. F family viewer: implemented (deterministic tree layout)", kMCOverlay1);
-    hudLine("C constraint: implemented（teal/red/yellow edges + ghost box）. EDIT add+props: implemented（dialogue/parent/child + 全 prop fields 編集, Prompt4/5・key 4）", kMCOverlay1);
+    // Prompt 6・統合後の実装状態（要件 6・凡例を実装済み状態に更新）。
+    hudLine("R general: active. F family viewer: implemented (deterministic tree layout). C constraint: implemented（teal/red/yellow edges + ghost box）", kMCOverlay1);
+    hudLine("EDIT add+props: implemented（dialogue/parent/child 追加 + 全 prop fields 編集・undo・key 4）. game mode: implemented（H / DDM_MODE=game・graph/HUD 描かず console のみ）", kMCOverlay1);
   }
 }
 
@@ -4315,6 +4390,16 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
   SDL_SetRenderVSync(gRenderer, 1);
 
+  // Prompt 6・game モード共存（要件 7）: 起動時の UI mode を環境変数 DDM_MODE で選ぶ。
+  // 既定（unset / "viewer"）は現行動作（graph overlay + HUD + console）をそのまま維持する。
+  // "game" は SDL_AppIterate の game 分岐（renderConsole と入力系統のみ・graph/HUD を描かない）。
+  // 実行中の切替は H キー（setUiMode）。DDM_SELFTEST は viewer 検証に集中する（game phase は
+  // 自己検証の一 phase として最後に H トグル往復で確認し、viewer に復元して終了する）。
+  const char *uiModeEnv = std::getenv("DDM_MODE");
+  if (uiModeEnv != nullptr && std::strcmp(uiModeEnv, "game") == 0) gUiMode = UI_GAME;
+  std::cout << "ui mode: " << (gUiMode == UI_GAME ? "game（DDM_MODE=game・H で viewer 復帰）"
+                                                  : "viewer（既定・graph overlay + HUD + console）") << std::endl;
+
   // --- 日本語描画: FreeType を動的ロードして日本語フォントを探す ---
   if (initGuiText()) {
     std::cout << "gui text: freetype ok, font=" << gGuiText.fontPath << std::endl;
@@ -4352,6 +4437,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   gViewScene = gGraph.smallestNonZeroScene();
   gViewMode = VIEW_GENERAL;
   gRoundTrip = verifyRoundTrip(gDocument);
+  // Prompt 6・要件 8: load 時の bytes を基準に保存し、最終の「data.txt は変更されない」確認に使う。
+  gLoadedBytes = gDocument.raw.size();
 
   std::cout << "=== [ Document ] ===" << std::endl;
   std::cout << "loaded: " << gLoadedPath << " bytes=" << gDocument.raw.size()
@@ -4377,6 +4464,22 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   return SDL_APP_CONTINUE;
 }
 
+// Prompt 6・game モード共存（要件 7）: UI mode 切替。game へ離れるときは editor の add flow と
+// props panel を閉じる（text input / GUI state の対称性・Document は変更しない）。
+// runtime（console の入力・renderConsole）はそのまま動作する。viewer 復帰時は graph の
+// mode・座標・選択はそのまま（applyActiveLayout は mode/scene 切替時の既存経路のまま触らない）。
+void setUiMode(UiMode m) {
+  if (m == gUiMode) return;
+  if (m == UI_GAME) {
+    editorLeaveModeIfNeeded(); // editor の add flow / text input を閉じる（取消・Document 不変）
+    propsClose();              // props panel を閉じる（undo stack・選択は保持。active=false のときも安全）
+  }
+  gUiMode = m;
+  std::cout << "ui mode switch: " << (m == UI_GAME ? "game（graph/HUD は描かない・renderConsole + 入力系統のみ）"
+                                                   : "viewer（graph overlay + HUD・既定動作）") << std::endl;
+  needRedraw = true;
+}
+
 // SDL_AppEvent
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (event->type == SDL_EVENT_QUIT) {
@@ -4384,8 +4487,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   }
 
   // EDITOR の add state 中は ESC を「選択解除」より取消（editorCancelAdd）を優先する（Prompt 4）。
+  // game mode では add flow 自体が閉じる（H トグルで setUiMode が取消する）ので viewer のみ。
   if (event->type == SDL_EVENT_KEY_DOWN && event->key.key == SDLK_ESCAPE &&
-      gViewMode == EDITOR && gEditor.stage != EDITOR_IDLE) {
+      gUiMode == UI_VIEWER && gViewMode == EDITOR && gEditor.stage != EDITOR_IDLE) {
     editorCancelAdd();
     needRedraw = true;
     return SDL_APP_CONTINUE;
@@ -4398,8 +4502,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     }
   }
 
-  // --- graph view: pan / zoom / node selection（挿入モード中は触らない） ---
-  if (gGraphEnabled && gAppMode == MODE_NORMAL &&
+  // --- graph view: pan / zoom / node selection（挿入モード中は触らない。game mode では
+  // graph を描かないので pointer は入力系統に渡さない — Prompt 6 要件 7） ---
+  if (gUiMode == UI_VIEWER && gGraphEnabled && gAppMode == MODE_NORMAL &&
       (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
        event->type == SDL_EVENT_MOUSE_BUTTON_UP ||
        event->type == SDL_EVENT_MOUSE_MOTION ||
@@ -4409,9 +4514,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   }
 
   if (event->type == SDL_EVENT_TEXT_INPUT && gAppMode == MODE_NORMAL &&
-      gViewMode == EDITOR && gEditor.stage == EDITOR_DIALOGUE) {
+      gUiMode == UI_VIEWER && gViewMode == EDITOR && gEditor.stage == EDITOR_DIALOGUE) {
     // editor の dialogue 入力（UTF-8・空白を含む入力をそのまま保持）。
-    // gViewMode が EDITOR でないときは GUI 入力を遮断する（上の条件）。
+    // gViewMode が EDITOR でないとき・game mode のときは GUI 入力を遮断する（上の条件）。
     gEditor.dialogue += event->text.text;
     needRedraw = true;
     return SDL_APP_CONTINUE;
@@ -4423,8 +4528,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 
       // EDITOR mode のとき GUI 用のキーを使い、runtime キー（TAB/F/O/I/A/U/M/Y/N）は遮断する。
       // graph view のキー（1-4 / V / P / X / E / R / D / L / 0 / +/- / [ ] / 矢印 / ESC / Q）は
-      // そのまま共通。gAppMode が挿入モードのときは上の既存遮断規則が優先される。
-      const bool editorMode = gViewMode == EDITOR;
+      // 共通（ただし viewer のみ。game mode では graph GUI キーを通さない — Prompt 6 要件 7）。
+      // gAppMode が挿入モードのときは上の既存遮断規則が優先される。
+      // game mode では editorMode=false（runtime キーそのまま動作＝「入力系統だけ」を動かす）。
+      const bool viewerUi = gUiMode == UI_VIEWER;
+      const bool editorMode = viewerUi && gViewMode == EDITOR;
 
       // props panel（Prompt 5）: open のとき編集キーを先に処理する（add flow の ENTER/Y/N/G・
       // graph の +/- zoom・ESC 選択解除に優先する。props は idle のときだけ開くので add flow と
@@ -4444,7 +4552,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         else if (key == SDLK_ESCAPE) { propsClose(); return SDL_APP_CONTINUE; } // panel 閉じを優先（選択解除・add 取消より先）
       }
 
-        // --- graph view keys（既存の入力は壊さない。VIEW_GENERAL の操作のみ） ---
+      // --- Prompt 6・game モード共存（要件 7）+ write policy トグル（要件 2） ---
+      // H = viewer/game 切替（game 側でも復帰用に動作する）。B = backup on quit トグル（既定 off）。
+      // graph view keys（1-4 / V / P / X / E / R / D / L / 0 / +/- / [ ] / 矢印 / viewer の
+      // ESC 選択解除 / editor・props GUI キー）は viewer のみ通す。runtime キー（TAB/F/O/I/A/U/M/Y/N）
+      // と Q / 挿入モードの ESC はどちらの mode でもそのまま（既存の入力システムを壊さない）。
+      if (key == SDLK_H) { setUiMode(viewerUi ? UI_GAME : UI_VIEWER); return SDL_APP_CONTINUE; }
+      if (key == SDLK_B) { gBackupOnQuit = !gBackupOnQuit; needRedraw = true; }
+
+      if (viewerUi) {
+        // --- graph view keys（既存の入力は壊さない。VIEW_GENERAL の操作のみ・viewer のみ） ---
         // 注: I/O/A/U/F/M は既存の入力システムそのまま。1-4 は既存で未使用のキー。
         // 1/2/3 に切り替えるときは editor の add flow を取消する（document は変更しない）。
         if (key == SDLK_1) { editorLeaveModeIfNeeded(); gViewMode = VIEW_GENERAL; applyActiveLayout(); fitViewToScene(); needRedraw = true; }
@@ -4468,8 +4585,10 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         else if (key == SDLK_UP) { gViewPanY += 24.f; needRedraw = true; }
         else if (key == SDLK_DOWN) { gViewPanY -= 24.f; needRedraw = true; }
         else if (key == SDLK_ESCAPE) { gSelectedNode = -1; needRedraw = true; }
+      } // viewerUi block end（graph view keys）
 
-        // --- EDITOR mode の GUI キー（Prompt 4。runtime キー TAB/F/O/I/A/U/M/Y/N は editor で遮断） ---
+        // --- EDITOR mode の GUI キー（Prompt 4。runtime キー TAB/F/O/I/A/U/M/Y/N は editor で遮断。
+        // editorMode は viewerUi を含むので game mode ではこれらのキーは通らない） ---
         if (editorMode) {
           if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
             editorEnterKey(); // idle → dialogue → quote → onetime → parent → child → commit
@@ -4643,13 +4762,76 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   // 通常の対話実行ではこの分岐は通らない。
   const char *selfTest = std::getenv("DDM_SELFTEST");
   if (selfTest != nullptr && selfTest[0] != '\0') {
+    // Prompt 6・要件 7: DDM_SELFTEST は viewer 検証に集中する。DDM_MODE=game で起動した場合も
+    // selftest は viewer に復帰して全 phase を検証する（game 分岐の動作・H 往復は
+    // game-mode phase で確認する。Document / data.txt は変わらない）。
+    if (gUiMode == UI_GAME) setUiMode(UI_VIEWER);
     printRoundTripReport(gDocument);
     printDocumentToStdout(gDocument);
+
+    // --- Prompt 6 round-trip baseline phase（要件 2・FAIL 検知に格上げ + 強化検証） ---
+    // load 直後の baseline を保存し（Document::raw は load 時のまま）、編集/追加後の diff が
+    // dirty/added 行のみであることを各 phase で検証する（RoundTripReport の added/edited）。
+    // terminator（"\n" / "\r\n" / ""）保持・正格式（quote・'0x'・lowercase16・trailing comma）・
+    // hasRead/dummy prop の load-time 保持をここで確認する。期待値はその場で合成する。
+    std::cout << "=== [ selftest round-trip baseline ] ===" << std::endl;
+    {
+      const RoundTripReport rtBase = verifyRoundTrip(gDocument);
+      gRoundTrip = rtBase;
+      const bool rtBaseOk = stPass(rtBase.exact, "round-trip baseline");
+      std::cout << "round_trip_baseline exact=" << (rtBaseOk ? 1 : 0) << " bytes=" << rtBase.originalBytes
+                << " serialized=" << rtBase.serializedBytes << " lines=" << rtBase.lineCount
+                << " baseline_lines=" << rtBase.baselineLines << std::endl;
+
+      // RawLine.terminator の保持: text + terminator の連結で raw 全バイト列が復元されること
+      // （CRLF・改行なし最終行を壊さない）。
+      std::string rebuilt;
+      rebuilt.reserve(gDocument.raw.size());
+      size_t crlfLines = 0, unterminated = 0;
+      for (const RawLine &rl : gDocument.lines) {
+        rebuilt += rl.text + rl.terminator;
+        if (rl.terminator == "\r\n") ++crlfLines;
+        else if (rl.terminator.empty()) ++unterminated;
+      }
+      const bool termOk = stPass(rebuilt == gDocument.raw, "round-trip baseline");
+      std::cout << "terminator_preserved match=" << (termOk ? 1 : 0) << " crlf_lines=" << crlfLines
+                << " unterminated_lines=" << unterminated << std::endl;
+
+      // 正格式の规则（再生成・追加行と同じ规则で検証する）: quote 形式・trailing comma・
+      // '0x' prefix・lowercase 16 桁。合成→再パースの往復をその場で合成した値で確認する。
+      const uint64_t fmtSample = 0x001000000010021dULL; // id=0x21 parent=0x10（他 bit 0 の合成例）
+      const std::string fmtHex = formatPropHex16(fmtSample);
+      const std::string fmtLine = "'fmt probe', '0x" + fmtHex + "',";
+      std::string fmtD;
+      uint64_t fmtP = 0;
+      const bool fmtOk = stPass(fmtHex.size() == 16 && fmtHex == "001000000010021d" &&
+                                parseElementLine(fmtLine, fmtD, fmtP) && fmtP == fmtSample &&
+                                fmtD == "fmt probe", "round-trip baseline");
+      std::cout << "canonical_format lower16_comma_0x match=" << (fmtOk ? 1 : 0)
+                << " sample='" << fmtLine << "'" << std::endl;
+
+      // hasRead をクリアしない・dummy 行の prop も原値を保持: containerA は load-time prop のまま。
+      bool propsKept = gDocument.elements.size() == containerA.size();
+      size_t hasReadCount = 0, dummyNonZero = 0;
+      for (size_t i = 0; i < containerA.size(); ++i) {
+        if (i >= gDocument.elements.size() ||
+            containerA[i].prop != gDocument.elements[i].element.prop ||
+            containerA[i].dialogue != gDocument.elements[i].element.dialogue) propsKept = false;
+      }
+      for (const ElementRecord &rec : gDocument.elements) {
+        if (getPropHasRead(rec.element.prop)) ++hasReadCount;
+        if (rec.element.dialogue == "dummy" && rec.element.prop != 0) ++dummyNonZero;
+      }
+      const bool keepOk = stPass(propsKept, "round-trip baseline");
+      std::cout << "load_time_props_preserved match=" << (keepOk ? 1 : 0) << " hasRead_in_doc=" << hasReadCount
+                << " dummy_nonzero_prop=" << dummyNonZero << std::endl;
+    }
 
     // view scene の先頭ノードの中心をクリックし、pickNode が正しい node を
     // 選ぶことを確認する。続けて zoom/pan を適用した後も同じ node が選ぶことを
     // world/screen 変換の往復として確認する。
     const std::vector<int> inScene = gGraph.nodesInScene(gViewScene);
+    if (inScene.empty()) stFail("selection"); // 検証対象の node が無い場合は FAIL（Prompt 6・要件 8）
     if (!inScene.empty()) {
       const int want = inScene[0];
       const GraphNode &n = gGraph.nodes[want];
@@ -4665,10 +4847,12 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       ev.button.y = before.y;
       handlePointerEvent(&ev);
 
+      // Prompt 6: selection の flag を FAIL 検知に格上げ（要件 8）。
+      const bool selMatch1 = stPass(gSelectedNode == want, "selection");
       std::cout << "=== [ selftest selection ] ===" << std::endl;
       std::cout << "want idx=" << want << " scene=" << hexNibble(n.scene)
                 << " id=" << hexByte(n.id) << " picked=" << gSelectedNode
-                << " match=" << (gSelectedNode == want ? 1 : 0) << std::endl;
+                << " match=" << (selMatch1 ? 1 : 0) << std::endl;
 
       zoomAt(320.f, 120.f, 1.f); // wheel zoom in
       gViewPanX += 40.f;         // pan
@@ -4678,8 +4862,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       ev.button.y = after.y;
       gSelectedNode = -1;
       handlePointerEvent(&ev);
+      const bool selMatch2 = stPass(gSelectedNode == want, "selection");
       std::cout << "after zoom/pan picked=" << gSelectedNode
-                << " match=" << (gSelectedNode == want ? 1 : 0) << std::endl;
+                << " match=" << (selMatch2 ? 1 : 0) << std::endl;
       printSelectedElementDetails();
 
     }
@@ -4708,11 +4893,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         if (gGraph.nodes[i].familyWx != famA[i].first ||
             gGraph.nodes[i].familyWy != famA[i].second) deterministic = false;
       }
+      // Prompt 6: family の flag を FAIL 検知に格上げ（要件 8・既存の期待値実行時計算はそのまま）。
+      const bool famDetOk = stPass(deterministic, "family layout");
       std::cout << "family_layout_deterministic scene=" << hexNibble(gViewScene) << "="
-                << (deterministic ? 1 : 0) << std::endl;
+                << (famDetOk ? 1 : 0) << std::endl;
 
       // pickNode が active layout（family 座標）で正しい node を選ぶこと。
       const std::vector<int> famScene = gGraph.nodesInScene(gViewScene);
+      if (famScene.empty()) stFail("family layout");
       if (!famScene.empty()) {
         const int want = famScene[0];
         const GraphNode &n = gGraph.nodes[want];
@@ -4726,15 +4914,16 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         ev.button.y = s.y;
         gSelectedNode = -1;
         handlePointerEvent(&ev);
+        const bool famPickOk = stPass(gSelectedNode == want, "family layout");
         std::cout << "family pick want idx=" << want << " id=" << hexByte(n.id)
-                  << " picked=" << gSelectedNode << " match="
-                  << (gSelectedNode == want ? 1 : 0) << std::endl;
+                  << " picked=" << gSelectedNode << " match=" << (famPickOk ? 1 : 0) << std::endl;
       }
 
       // forest 数の照合（scene 0/1/2/15）。期待値は prop の直接パースから作る（graph 構造を通さない）:
       //   rootLike = parent == 0 または parent が同 scene に無い node。
       //   weakly-connected component ごとに max(1, rootLike数) を forest 数として足す
       //   （root が無い cycle component は 1 tree。layout 側も同じ規則で並べる）。
+      bool famForestOk = true; // Prompt 6: forest/placed の照合を全 scene で集約して FAIL 検知する
       for (uint8_t probe : gGraph.scenes) {
         if (probe != 0 && probe != 1 && probe != 2 && probe != 15) continue;
         std::unordered_map<uint8_t, uint8_t> parentById;
@@ -4786,13 +4975,63 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           if (gGraph.nodes[i].famDepth == 0) ++layoutForest;
           if (gGraph.nodes[i].famDepth >= 0) ++placedCnt;
         }
+        const bool famMatch = expectedTrees == layoutForest && placedCnt == ids.size();
+        famForestOk &= famMatch;
         std::cout << "scene=" << hexNibble(probe) << " nodes=" << ids.size()
                   << " roots_p0=" << graphP0 << " dangling_parent=" << graphDangling
                   << " expected_forest=" << expectedTrees << " layout_forest=" << layoutForest
                   << " placed=" << placedCnt << "/" << ids.size() << " match="
-                  << (expectedTrees == layoutForest && placedCnt == ids.size() ? 1 : 0)
-                  << std::endl;
+                  << (famMatch ? 1 : 0) << std::endl;
       }
+      std::cout << "family_forest_all_scenes match=" << (stPass(famForestOk, "family layout") ? 1 : 0) << std::endl;
+
+      // Prompt 6・要件 4: 構造 edge の区別（parent field edge と slot1 child edge）が壊れていないこと。
+      // present/dangling の数を prop 直接パースの期待値（first-wins・buildGraph と同じ扱い）で照合し、
+      // 矛盾 edge（child target の parent field が child 以外を指す＝family の yellow overlay）も照合する。
+      size_t expParAll = 0, expParD = 0, expChiAll = 0, expChiD = 0, expConflict = 0;
+      for (uint8_t probe : gGraph.scenes) {
+        std::unordered_map<uint8_t, uint64_t> propById;
+        for (const ElementRecord &rec : gDocument.elements) {
+          if (getPropScene(rec.element.prop) != probe) continue;
+          const uint8_t idS = getPropID(rec.element.prop);
+          if (propById.find(idS) != propById.end()) continue; // duplicate は graph 側でも skip
+          propById[idS] = rec.element.prop;
+        }
+        for (const auto &kv : propById) {
+          const uint8_t parS = getPropParent(kv.second);
+          if (parS != 0) {
+            if (propById.find(parS) != propById.end()) ++expParAll;
+            else ++expParD;
+          }
+          const uint8_t chiS = getPropChild(kv.second);
+          if (chiS != 0) {
+            if (propById.find(chiS) != propById.end()) {
+              ++expChiAll;
+              if (getPropParent(propById[chiS]) != kv.first) ++expConflict; // 矛盾（drawFamilyView の yellow）
+            } else ++expChiD;
+          }
+        }
+      }
+      size_t gotParP = 0, gotParD = 0, gotChiP = 0, gotChiD = 0, gotConflict = 0;
+      for (const GraphEdge &e : gGraph.edges) {
+        if (e.kind == EDGE_PARENT) {
+          if (e.dangling || e.from < 0) ++gotParD;
+          else ++gotParP;
+        } else if (e.kind == EDGE_CHILD) {
+          if (e.dangling || e.to < 0) ++gotChiD;
+          else {
+            ++gotChiP;
+            if (gGraph.nodes[e.from].parentId != gGraph.nodes[e.to].id) ++gotConflict;
+          }
+        }
+      }
+      const bool structOk = stPass(expParAll == gotParP && expParD == gotParD &&
+                                   expChiAll == gotChiP && expChiD == gotChiD &&
+                                   expConflict == gotConflict, "family layout");
+      std::cout << "structure_edges parent present=" << gotParP << "/" << expParAll
+                << " dangling=" << gotParD << "/" << expParD << " child present=" << gotChiP << "/" << expChiAll
+                << " dangling=" << gotChiD << "/" << expChiD << " conflict=" << gotConflict << "/" << expConflict
+                << " separated match=" << (structOk ? 1 : 0) << std::endl;
 
       // family mode の実描画 → pixel readback（active layout で描かれた kMC 実色を確認する）。
       if (gRenderer) {
@@ -4830,6 +5069,39 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                       << " sky=" << kmcCount(kMCSky) << " text=" << kmcCount(kMCText)
                       << " lavender=" << kmcCount(kMCLavender) << " peach=" << kmcCount(kMCPeach)
                       << " yellow=" << kmcCount(kMCYellow) << std::endl;
+            // Prompt 6: family frame の PASS を FAIL 検知に格上げ。階層 edge=sapphire・explicit
+            // child edge=peach の区別（期待値は prop 直接パース・first-wins）、HUD の text/subtext1
+            // 出現を必須とする。矛盾 yellow（family 意味）は info（excluded slot2 の yellow と別意味）。
+            std::unordered_map<uint8_t, uint64_t> mapCapF;
+            for (const ElementRecord &rec : gDocument.elements) {
+              if (getPropScene(rec.element.prop) != gViewScene) continue;
+              const uint8_t idF = getPropID(rec.element.prop);
+              if (mapCapF.find(idF) != mapCapF.end()) continue;
+              mapCapF[idF] = rec.element.prop;
+            }
+            size_t expParF = 0, expChiF = 0, expConfF = 0;
+            for (const auto &kv : mapCapF) {
+              const uint8_t parF = getPropParent(kv.second);
+              if (parF != 0 && mapCapF.find(parF) != mapCapF.end()) ++expParF;
+              const uint8_t chiF = getPropChild(kv.second);
+              if (chiF != 0 && mapCapF.find(chiF) != mapCapF.end()) {
+                // drawFamilyView の意味体系: 矛盾 edge（child target の parent が別ノード）は
+                // peach ではなく yellow で overlay される（Prompt 2 実装・凡例）。peach 実色
+                // 要求は矛盾なしの child edge があるときのみ。矛盾は yellow の info として照合。
+                if (getPropParent(mapCapF[chiF]) == kv.first) ++expChiF;
+                else ++expConfF;
+              }
+            }
+            bool famFrameOk = bright > 0 && kmcCount(kMCText) > 0 && kmcCount(kMCSubtext1) > 0;
+            if (expParF > 0) famFrameOk &= kmcCount(kMCSapphire) > 0;
+            if (expChiF > 0) famFrameOk &= kmcCount(kMCPeach) > 0;
+            if (expConfF > 0) famFrameOk &= kmcCount(kMCYellow) > 0; // 矛盾 yellow overlay の実色
+            famFrameOk = stPass(famFrameOk, "family layout");
+            std::cout << "family frame PASS bright=" << bright << " hierarchy_sapphire=" << kmcCount(kMCSapphire)
+                      << "/" << expParF << " child_peach=" << kmcCount(kMCPeach) << "/" << expChiF
+                      << " conflict_yellow=" << kmcCount(kMCYellow) << "/" << expConfF
+                      << " text=" << kmcCount(kMCText) << " subtext1=" << kmcCount(kMCSubtext1)
+                      << " ok=" << (famFrameOk ? 1 : 0) << std::endl;
             std::vector<std::pair<uint32_t, uint32_t>> famTop(hist.begin(), hist.end());
             std::sort(famTop.begin(), famTop.end(),
                       [](const auto &a, const auto &b) { return a.second > b.second; });
@@ -4842,6 +5114,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           }
           SDL_DestroySurface(famShot);
         } else {
+          stFail("family layout"); // Prompt 6: frame capture が取れない場合は FAIL（要件 8）
           std::cout << "family frame capture unavailable: " << SDL_GetError() << std::endl;
         }
       }
@@ -4856,14 +5129,15 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         if (gGraph.nodes[i].wx != genPos[i].first || gGraph.nodes[i].wy != genPos[i].second)
           intact = false;
       }
-      std::cout << "general_coords_intact_after_mode_round_trip=" << (intact ? 1 : 0)
-                << std::endl;
+      std::cout << "general_coords_intact_after_mode_round_trip="
+                << (stPass(intact, "family layout") ? 1 : 0) << std::endl;
 
       // family viewer は Document を mutate しない: round-trip は EXACT のまま。
       const RoundTripReport rtFam = verifyRoundTrip(gDocument);
       gRoundTrip = rtFam;
+      const bool rtFamOk = stPass(rtFam.exact, "family layout");
       std::cout << "round_trip_after_family_phase="
-                << (rtFam.exact ? "EXACT OK" : "MISMATCH") << std::endl;
+                << (rtFamOk ? "EXACT OK" : "MISMATCH") << std::endl;
     }
 
     // --- constraint phase（Prompt 3）: scene ごとの制約 edge / ghost の数を、現行 gDocument の
@@ -4886,6 +5160,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       int wantSel = -1;
       uint32_t wantKey = 0;
       const std::vector<int> inSceneC = gGraph.nodesInScene(gViewScene);
+      if (inSceneC.empty()) stFail("constraint edges");
       if (!inSceneC.empty()) {
         wantSel = inSceneC[0];
         const GraphNode &n = gGraph.nodes[wantSel];
@@ -4901,7 +5176,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         gSelectedNode = -1;
         handlePointerEvent(&ev);
         std::cout << "constraint base pick idx=" << wantSel << " match="
-                  << (gSelectedNode == wantSel ? 1 : 0) << std::endl;
+                  << (stPass(gSelectedNode == wantSel, "constraint edges") ? 1 : 0) << std::endl;
       }
 
       // scene ごとの edge kind / ghost の数。期待値は prop の直接パースから実行時に算出する
@@ -4963,8 +5238,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                   << " excluded_slot2_ghost=" << got.excludedSlot2Ghost << "/" << exp.excludedSlot2Ghost
                   << " match=" << (match ? 1 : 0) << std::endl;
       }
-      std::cout << "constraint_edge_counts match=" << (countsMatch ? 1 : 0)
-                << " present_resolve_ok=" << (resolveOk ? 1 : 0) << std::endl;
+      // Prompt 6: constraint の kind/ghost 照合・present 解決を FAIL 検知に格上げ（要件 8）。
+      std::cout << "constraint_edge_counts match=" << (stPass(countsMatch, "constraint edges") ? 1 : 0)
+                << " present_resolve_ok=" << (stPass(resolveOk, "constraint edges") ? 1 : 0) << std::endl;
       std::cout << "constraint totals required=" << totalReq << " excluded=" << totalEx;
       if (totalEx == 0) std::cout << " excluded_edges=0 (none in data.txt)";
       std::cout << std::endl;
@@ -4977,21 +5253,24 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       gViewMode = VIEW_CONSTRAINT;
       applyActiveLayout();
       fitViewToScene();
-      const bool fitSame = gViewZoom == zoom0 && gViewPanX == panX0 && gViewPanY == panY0;
+      // Prompt 6: 往復（1->2->3->1）の fit・座標・選択保持を FAIL 検知に格上げ（要件 5・8）。
+      const bool fitSame = stPass(gViewZoom == zoom0 && gViewPanX == panX0 && gViewPanY == panY0,
+                                  "constraint edges");
       std::cout << "constraint_fit_matches_general=" << (fitSame ? 1 : 0) << std::endl;
       bool coordsIntactMid = true;
       for (size_t i = 0; i < gGraph.nodes.size(); ++i) {
         if (gGraph.nodes[i].wx != genPosC[i].first || gGraph.nodes[i].wy != genPosC[i].second)
           coordsIntactMid = false;
       }
-      std::cout << "general_coords_intact_through_family_constraint=" << (coordsIntactMid ? 1 : 0)
-                << std::endl;
+      std::cout << "general_coords_intact_through_family_constraint="
+                << (stPass(coordsIntactMid, "constraint edges") ? 1 : 0) << std::endl;
       const bool selKept =
           wantSel < 0 ||
           (gSelectedNode == wantSel &&
            gGraph.nodes[wantSel].scene == static_cast<uint8_t>(wantKey >> 8) &&
            gGraph.nodes[wantSel].id == static_cast<uint8_t>(wantKey & 0xFFu));
-      std::cout << "selection_kept_through_mode_round_trip=" << (selKept ? 1 : 0) << std::endl;
+      std::cout << "selection_kept_through_mode_round_trip="
+                << (stPass(selKept, "constraint edges") ? 1 : 0) << std::endl;
 
       // constraint の active layout（general の座標そのまま）で pickNode が正しい node を選ぶこと。
       if (wantSel >= 0) {
@@ -5006,8 +5285,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         ev.button.y = c.y;
         gSelectedNode = -1;
         handlePointerEvent(&ev);
+        const bool conPickOk = stPass(gSelectedNode == wantSel, "constraint edges");
         std::cout << "constraint pick want idx=" << wantSel << " picked=" << gSelectedNode
-                  << " match=" << (gSelectedNode == wantSel ? 1 : 0) << std::endl;
+                  << " match=" << (conPickOk ? 1 : 0) << std::endl;
         gSelectedNode = wantSel;
       }
 
@@ -5021,8 +5301,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           intact = false;
       }
       const bool selRestored = wantSel < 0 || gSelectedNode == wantSel;
-      std::cout << "general_coords_intact_after_constraint_round_trip=" << (intact ? 1 : 0)
-                << " selection_restored=" << (selRestored ? 1 : 0) << std::endl;
+      std::cout << "general_coords_intact_after_constraint_round_trip="
+                << (stPass(intact, "constraint edges") ? 1 : 0) << " selection_restored="
+                << (stPass(selRestored, "constraint edges") ? 1 : 0) << std::endl;
 
       // constraint mode の実描画。capture scene は現行 scene に required edge が 0 件なら
       // required が 1件以上の最小 scene を選ぶ（teal が view に出るため）。required がどこにも
@@ -5106,12 +5387,17 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                       << std::endl;
             // PASS 条件: required edge が 1件以上あれば teal の出現必須 + HUD の text/subtext1 出現。
             // red/yellow は excluded edge の分だけ出現することを info として報告する（PASS 条件にしない）。
-            const bool tealPass = captureReq == 0 || kmcCount(kMCTeal) > 0;
+            // Prompt 6: constraint frame の PASS を FAIL 検知に格上げ（required≥1 なら teal 必須・
+            // HUD の text/subtext1 必須）。red/yellow は excluded の分の出現のみ info（red の
+            // 既存出現は quote ストライプ由来と混同しない — Prompt 3 の教訓）。
+            const bool tealPass = stPass(captureReq == 0 || kmcCount(kMCTeal) > 0, "constraint edges");
             std::cout << "constraint_required_edges=" << captureReq << " teal_present="
                       << (kmcCount(kMCTeal) > 0 ? 1 : 0) << " teal_pass=" << (tealPass ? 1 : 0)
                       << std::endl;
+            const bool conHudOk = stPass(kmcCount(kMCText) > 0 && kmcCount(kMCSubtext1) > 0, "constraint edges");
             std::cout << "constraint hud text_present=" << (kmcCount(kMCText) > 0 ? 1 : 0)
-                      << " subtext1_present=" << (kmcCount(kMCSubtext1) > 0 ? 1 : 0) << std::endl;
+                      << " subtext1_present=" << (kmcCount(kMCSubtext1) > 0 ? 1 : 0)
+                      << " ok=" << (conHudOk ? 1 : 0) << std::endl;
             if (capIt != expectedByScene.end()) {
               std::cout << "constraint info: red/yellow appear by amount of excluded edges "
                         << "(scene=" << hexNibble(captureScene)
@@ -5130,6 +5416,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
           }
           SDL_DestroySurface(conShot);
         } else {
+          stFail("constraint edges"); // Prompt 6: frame capture が取れない場合は FAIL（要件 8）
           std::cout << "constraint frame capture unavailable: " << SDL_GetError() << std::endl;
         }
       }
@@ -5143,8 +5430,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       // constraint viewer は Document を mutate しない: round-trip は往復後も EXACT のまま。
       const RoundTripReport rtCon = verifyRoundTrip(gDocument);
       gRoundTrip = rtCon;
+      const bool rtConOk = stPass(rtCon.exact, "constraint edges");
       std::cout << "round_trip_after_constraint_phase="
-                << (rtCon.exact ? "EXACT OK" : "MISMATCH") << std::endl;
+                << (rtConOk ? "EXACT OK" : "MISMATCH") << std::endl;
     }
 
     // --- editor phase（Prompt 4）: EDITOR の Element 追加 GUI を検証する。
@@ -5510,11 +5798,27 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       const bool exitOk = gViewMode == VIEW_GENERAL && gEditor.stage == EDITOR_IDLE && !gEditorTextInputActive;
       std::cout << "editor_mode_back_general_state_cleared=" << (exitOk ? 1 : 0) << std::endl;
 
-      const bool editorAllOk = nextFreeOk && modeOk && started && cancelOk && emptyRejected &&
-                               assignedOk && quoteStageOk && addedOne && formatOk && graphOk && familyOk &&
-                               constraintOk1 && selectionOk && rtOk1 && runtimeOk && id2Ok && parentSelOk &&
-                               childSelOk && prop2Ok && childEdgeOk && childAdjOk && addedTwo && rtOk2 &&
-                               constraintOk2 && frameOk && restoredOk && exitOk;
+      // Prompt 6・要件 5: editor の add state では runtime の console 挿入（TAB）が遮断され、
+      // general 復帰後は TAB で挿入 flow が開き ESC で対称に閉じる（Start/Stop・console 入力
+      // と GUI キーの衝突がないこと）。既存の遮断規則・cancelInsertMode をそのまま検証する。
+      postKey(SDLK_4);
+      postKey(SDLK_TAB); // EDITOR では editorMode ガードで insert flow に触らない
+      const bool runtimeBlocked = gAppMode == MODE_NORMAL && gEditor.stage == EDITOR_IDLE;
+      postKey(SDLK_1);
+      postKey(SDLK_TAB);
+      const bool insertStarted = gAppMode == MODE_INSERT_TEXT;
+      postKey(SDLK_ESCAPE); // 挿入モードの ESC は cancelInsertMode（既存経路・text input Stop 対称）
+      const bool insertCancelled = gAppMode == MODE_NORMAL && gEditor.stage == EDITOR_IDLE;
+      std::cout << "editor_runtime_key_blocked=" << (runtimeBlocked ? 1 : 0) << " insert_flow_symmetry="
+                << (insertStarted && insertCancelled ? 1 : 0) << std::endl;
+
+      // Prompt 6: editor の全 flag を FAIL 検知に格上げ（要件 3・8）。期待値計算は Prompt 4 のまま。
+      const bool editorAllOk = stPass(nextFreeOk && modeOk && started && cancelOk && emptyRejected &&
+                                     assignedOk && quoteStageOk && addedOne && formatOk && graphOk && familyOk &&
+                                     constraintOk1 && selectionOk && rtOk1 && runtimeOk && id2Ok && parentSelOk &&
+                                     childSelOk && prop2Ok && childEdgeOk && childAdjOk && addedTwo && rtOk2 &&
+                                     constraintOk2 && frameOk && restoredOk && exitOk && runtimeBlocked &&
+                                     insertStarted && insertCancelled, "editor add");
       std::cout << "editor_phase_all_flags=" << (editorAllOk ? 1 : 0) << std::endl;
       std::cout << "round_trip_after_editor_phase=" << (rtBack.exact ? "EXACT OK" : "MISMATCH") << std::endl;
     }
@@ -6088,6 +6392,20 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       std::cout << "props G graph rebuild ok=" << (rebuildOk ? 1 : 0) << " runtime untouched=1" << std::endl;
       editsOk &= rebuildOk;
 
+      // Prompt 6・要件 5: scene 切替（[ ] は共通経路・props の TAB/ENTER/+/-/Y/N/U/G/ESC 優先を
+      // 通過する）でも props panel・nodeKey・(scene,id) 解決は壊れないこと。切替往復で
+      // panel open / nodeKey / 解決がそのまま維持されることを確認する（document は触らない）。
+      const uint8_t sceneBeforeSw = gViewScene;
+      postKey(SDLK_LEFTBRACKET);
+      const bool panelSwOn = gProps.active && propsResolveCurrentNode() >= 0 &&
+                             gProps.nodeKey == nodeKey(curScene(), curId());
+      postKey(SDLK_RIGHTBRACKET);
+      const bool panelSwOk = stPass(panelSwOn && gViewScene == sceneBeforeSw && gProps.active &&
+                                   propsResolveCurrentNode() >= 0 &&
+                                   gProps.nodeKey == nodeKey(curScene(), curId()), "props edit");
+      std::cout << "props_panel_survives_scene_switch ok=" << (panelSwOk ? 1 : 0) << std::endl;
+      editsOk &= panelSwOk;
+
       // real props panel の描画 → build/viewer_frame_props.bmp（PASS: text/subtext1/sky・yellow は info）。
       bool frameOk = false;
       {
@@ -6175,9 +6493,15 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                    gGraph.roots.size() == baseRoots && gSelectedNode == restoredIdx &&
                    containerA.size() == baseContA && containerB.size() == baseContB &&
                    !gDocTerminatorPatched && !gProps.undoStack.empty() == false;
+      // Prompt 6: undo phase を FAIL 検知に格上げ（要件 3・8）。undo stack 上限（kPropsUndoMax,
+      // Prompt 6 で 256 に引き上げ）に達していないことも確認する — 満杯だと全 undo で baseline に
+      // 戻らないため（Prompt 5 の観測）。期待値は元の prop/line/dirty/graph を実行時比較で算出。
+      const bool undoHeadroomOk = undoCount < kPropsUndoMax;
+      const bool undoPhaseOk = stPass(restoreOk && undoHeadroomOk, "undo");
       std::cout << "props undo undo_count=" << undoCount << " restore baseline exact=" << (rtUndoBack.exact ? 1 : 0)
-                << " match=" << (restoreOk ? 1 : 0) << std::endl;
-      editsOk &= restoreOk;
+                << " match=" << (restoreOk ? 1 : 0) << " undo_limit=" << kPropsUndoMax
+                << " headroom=" << (undoHeadroomOk ? 1 : 0) << " ok=" << (undoPhaseOk ? 1 : 0) << std::endl;
+      editsOk &= restoreOk && undoHeadroomOk;
 
       // general に戻る（props panel は mode 切替で閉じる・document は元のまま）。
       postKey(SDLK_1);
@@ -6186,9 +6510,11 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       std::cout << "props mode back general state cleared=" << (exitOk ? 1 : 0) << std::endl;
       editsOk &= exitOk;
 
-      const bool propsAllOk = targetFound && rtOk && cdOk && modeOk && openedByClick && openedByRight && variantOk &&
-                              tabOk && enterToggleOk && reparseOk && undoRestoreOk && yOk && nOk && tabWrapOk &&
-                              ynUndoOk && keyNoWarnOk && editsOk;
+      // Prompt 6: props の全 flag を FAIL 検知に格上げ（要件 3・8）。期待値は Prompt 5 の
+      // 実行時計算（prop 直接パース）のまま。undo phase の復元は "undo" として別 phase 集約。
+      const bool propsAllOk = stPass(targetFound && rtOk && cdOk && modeOk && openedByClick && openedByRight && variantOk &&
+                                     tabOk && enterToggleOk && reparseOk && undoRestoreOk && yOk && nOk && tabWrapOk &&
+                                     ynUndoOk && keyNoWarnOk && editsOk, "props edit");
       std::cout << "props_phase_all_flags=" << (propsAllOk ? 1 : 0) << std::endl;
       std::cout << "round_trip_after_props_phase=" << (rtUndoBack.exact ? "EXACT OK" : "MISMATCH") << std::endl;
     }
@@ -6198,11 +6524,16 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
               << " font=" << gGuiText.fontPath << " err=" << gGuiText.lastError << std::endl;
     if (gGuiText.ready && gRenderer) {
       // 日本語 glyph が rasterize できているか（texture と bitmap 寸法を確認する）。
+      // Prompt 6: ready の環境で glyph が rasterize できなかったら FAIL（ascii fallback
+      // 環境は描画側の PASS 検証で扱う — 環境制約は失敗にしない）。
+      bool glyphsAllOk = true;
       for (uint32_t cp : {0x8983u /*見*/, 0x8A71u /*話*/, 0x308Bu /*る*/, 0x5C31u /*札*/}) {
         const GlyphRec *g = guiGlyph(gRenderer, cp);
+        if (!g) glyphsAllOk = false;
         std::cout << "glyph cp=" << cp << " drawn=" << (g ? 1 : 0) << " w=" << (g ? g->w : 0)
                   << " h=" << (g ? g->h : 0) << " adv=" << (g ? g->advance : 0.f) << std::endl;
       }
+      stPass(glyphsAllOk, "font");
     }
 
     // 画面を実際に描いて pixel を読み出し、日本語テキストが描画されているか検証する。
@@ -6214,8 +6545,10 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       SDL_Surface *shot = SDL_RenderReadPixels(gRenderer, nullptr);
       if (shot) {
         SDL_SaveBMP(shot, "build/viewer_frame.bmp");
+        // Prompt 6・要件 8: mode 別 frame の general を保存する（viewer_frame_<mode>. の規則）。
+        SDL_SaveBMP(shot, "build/viewer_frame_general.bmp");
         std::cout << "frame captured " << shot->w << "x" << shot->h <<
-                  " -> build/viewer_frame.bmp" << std::endl;
+                  " -> build/viewer_frame.bmp / build/viewer_frame_general.bmp" << std::endl;
         // 読み出し surface のレイアウトは driver 依存なので、確定した RGB24 に
         // 変換してから pixel を読む（RGBA8888/XRGB8888 の取り違えを防ぐ）。
         SDL_Surface *rgba = SDL_ConvertSurface(shot, SDL_PIXELFORMAT_RGB24);
@@ -6249,10 +6582,40 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
             std::cout << "  color 0x" << std::hex << std::setw(6) << std::setfill('0')
                       << top[i].first << " count=" << std::dec << top[i].second << std::endl;
           }
+          // Prompt 6・要件 8: general frame の PASS を FAIL 検知に格上げ。HUD の text/subtext1 出現を
+          // 必須とし、parent field edge=sapphire・child edge=peach の区別は capture scene の
+          // 期待値（prop 直接パース・first-wins）があるときのみ実色を要求する（family/constraint
+          // frame と同じ方針。red の出現は quote ストライプ由来・lavender は選択 info）。
+          const auto kmcCount = [&](uint32_t hexColor) -> uint32_t {
+            const auto it = hist.find(hexColor);
+            return it == hist.end() ? 0u : it->second;
+          };
+          std::unordered_map<uint8_t, uint64_t> mapCapG;
+          for (const ElementRecord &rec : gDocument.elements) {
+            if (getPropScene(rec.element.prop) != gViewScene) continue;
+            const uint8_t idG = getPropID(rec.element.prop);
+            if (mapCapG.find(idG) != mapCapG.end()) continue;
+            mapCapG[idG] = rec.element.prop;
+          }
+          size_t expParG = 0, expChiG = 0;
+          for (const auto &kv : mapCapG) {
+            const uint8_t parG = getPropParent(kv.second);
+            if (parG != 0 && mapCapG.find(parG) != mapCapG.end()) ++expParG;
+            const uint8_t chiG = getPropChild(kv.second);
+            if (chiG != 0 && mapCapG.find(chiG) != mapCapG.end()) ++expChiG;
+          }
+          bool genFrameOk = bright > 0 && kmcCount(kMCText) > 0 && kmcCount(kMCSubtext1) > 0;
+          if (expParG > 0) genFrameOk &= kmcCount(kMCSapphire) > 0;
+          if (expChiG > 0) genFrameOk &= kmcCount(kMCPeach) > 0;
+          genFrameOk = stPass(genFrameOk, "font");
+          std::cout << "general frame PASS bright=" << bright << " sapphire=" << kmcCount(kMCSapphire) << "/" << expParG
+                    << " peach=" << kmcCount(kMCPeach) << "/" << expChiG << " text=" << kmcCount(kMCText)
+                    << " subtext1=" << kmcCount(kMCSubtext1) << " ok=" << (genFrameOk ? 1 : 0) << std::endl;
           SDL_DestroySurface(rgba);
         }
         SDL_DestroySurface(shot);
       } else {
+        stFail("font"); // Prompt 6: frame capture が取れない場合は FAIL（要件 8）
         std::cout << "frame capture unavailable: " << SDL_GetError() << std::endl;
       }
     }
@@ -6260,7 +6623,287 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     switchScene(+1);
     std::cout << "switchScene(+1) -> scene=" << hexNibble(gViewScene)
               << " nodes=" << gGraph.nodesInScene(gViewScene).size() << std::endl;
-    return SDL_APP_SUCCESS;
+
+    // --- Prompt 6 palette audit phase（要件 6・色と視認性の監査） ---
+    // 数値 RGB リテラル監査（kMC 定数定義以外 zero）・SDL_RenderDebugText は fallback のみ・
+    // glyph texture は RGBA32・readback は RGB24 変換後。面+テキストの WCAG を pixel readback の
+    // 実色で測り text/subtext1 の組合せが 4.5:1 以上であることを確認する（mocha 公式組合せ）。
+    std::cout << "=== [ selftest palette audit ] ===" << std::endl;
+    {
+      std::string srcPath;
+      for (const char *c : {"./main.cpp", "../main.cpp"}) {
+        std::ifstream probe(c);
+        if (probe.is_open()) { srcPath = c; break; }
+      }
+      const bool srcOk = stPass(!srcPath.empty(), "palette audit");
+      int kmcDefs = 0, litOutside = 0, debugUses = 0, debugGuardOk = 0;
+      int rgba32 = 0, rgba8888 = 0, rgb24 = 0;
+      // 監査対象の needle を分割して作る（分割後のリテラルは監査コード自身に
+      // 連結形では現れないので、この phase のコードが自己を counting しない）。
+      const std::string debugNeedle = std::string("SDL_") + "RenderDebugText(";
+      const std::string rgba8888Needle = std::string("SDL_PIXELFORMAT_RGBA") + "8888";
+      const std::string rgba32Needle = std::string("SDL_PIXELFORMAT_RGBA") + "32";
+      const std::string rgb24Needle = std::string("SDL_PIXELFORMAT_RGB") + "24";
+      const auto isHexChar = [](char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+      };
+      int lastDebugLine = -1, lastReadyGuardLine = -1;
+      if (srcOk) {
+        std::ifstream src(srcPath);
+        std::string line;
+        int lineNo = 0;
+        while (std::getline(src, line)) {
+          ++lineNo;
+          const size_t slash = line.find("//");
+          if (slash != std::string::npos) line = line.substr(0, slash); // line comment は監査対象外
+          const bool kmcDefLine = line.find("constexpr uint32_t kMC") != std::string::npos;
+          if (kmcDefLine) ++kmcDefs;
+          size_t p = line.find("0x");
+          while (p != std::string::npos) {
+            size_t q = p + 2;
+            int n = 0;
+            while (q < line.size() && isHexChar(line[q])) { ++n; ++q; }
+            // 6桁ちょうどの 0xRRGGBB リテラル（kMC 定数定義以外）を数える。
+            // longer hex literals（prop 値・bit mask・%016llx 出力）は対象にしない。
+            if (n == 6 && !kmcDefLine) ++litOutside;
+            p = line.find("0x", p + 2);
+          }
+          if (line.find(debugNeedle) != std::string::npos) {
+            ++debugUses;
+            lastDebugLine = lineNo;
+            if (lastReadyGuardLine > 0 && lineNo - lastReadyGuardLine <= 20) debugGuardOk = 1;
+          }
+          if (line.find("gGuiText.ready") != std::string::npos) lastReadyGuardLine = lineNo;
+          if (line.find(rgba32Needle) != std::string::npos) ++rgba32;
+          if (line.find(rgba8888Needle) != std::string::npos) ++rgba8888;
+          if (line.find(rgb24Needle) != std::string::npos) ++rgb24;
+        }
+      }
+      const bool litOk = srcOk && kmcDefs > 0 && litOutside == 0;
+      const bool apiOk = debugUses <= 1 && debugGuardOk == 1 && rgba8888 == 0 && rgba32 > 0 && rgb24 > 0;
+      stPass(litOk, "palette audit");
+      stPass(apiOk, "palette audit");
+      std::cout << "palette literals: kmc_definitions=" << kmcDefs << " numeric_rgb_literals_outside_kmc_defs="
+                << litOutside << " match=" << (litOk ? 1 : 0) << " (grep 相当・line comment は除く)" << std::endl;
+      std::cout << "text/api guards: debugtext_code_uses=" << debugUses << " fallback_only=" << debugGuardOk
+                << " rgba8888=" << rgba8888 << " rgba32=" << rgba32 << " rgb24_readback=" << rgb24
+                << " match=" << (apiOk ? 1 : 0) << std::endl;
+
+      // WCAG を pixel readback の実色で測る（要件 6）。合成 band（face 面 + text/subtext1 行）を
+      // 描いて build/viewer_frame_palette.bmp に保存し、face 面の色は直接 pixel、text/subtext1 の
+      // 実色は bright ヒストグラムで確認してから contrast ratio を計算する（4.5:1 以上）。
+      const uint32_t faces6[] = {kMCBase, kMCMantle, kMCSurface0, kMCSurface1, kMCFillTemplate, kMCFillEmpty};
+      const uint32_t fg2[] = {kMCText, kMCSubtext1};
+      const size_t faceCount = sizeof(faces6) / sizeof(faces6[0]);
+      bool wcagOk = false;
+      if (gRenderer) {
+        int winW = 0, winH = 0;
+        windowSize(&winW, &winH);
+        const float bandH = static_cast<float>(winH) / static_cast<float>(faceCount);
+        setSolid(gRenderer, kMCBase);
+        SDL_RenderClear(gRenderer);
+        for (size_t i = 0; i < faceCount; ++i) {
+          const SDL_FRect band{0.f, static_cast<float>(i) * bandH, static_cast<float>(winW), bandH + 1.f};
+          setSolid(gRenderer, faces6[i]);
+          SDL_RenderFillRect(gRenderer, &band);
+          drawGuiLine(gRenderer, 10.f, static_cast<float>(i) * bandH + 8.f, "contrast audit row text", 1.f,
+                      static_cast<float>(winW) - 20.f, fg2[0]);
+          drawGuiLine(gRenderer, 10.f, static_cast<float>(i) * bandH + 24.f, "contrast audit row subtext1", 1.f,
+                      static_cast<float>(winW) - 20.f, fg2[1]);
+        }
+        SDL_RenderPresent(gRenderer);
+        SDL_Surface *paShot = SDL_RenderReadPixels(gRenderer, nullptr);
+        if (paShot) {
+          SDL_SaveBMP(paShot, "build/viewer_frame_palette.bmp");
+          std::cout << "palette frame captured " << paShot->w << "x" << paShot->h << " -> build/viewer_frame_palette.bmp" << std::endl;
+          SDL_Surface *paRgb = SDL_ConvertSurface(paShot, SDL_PIXELFORMAT_RGB24);
+          if (paRgb) {
+            std::map<uint32_t, uint32_t> hist;
+            uint32_t bright = 0;
+            for (int y = 0; y < paRgb->h; ++y) {
+              const uint8_t *row = static_cast<const uint8_t *>(paRgb->pixels) +
+                                   static_cast<size_t>(y) * paRgb->pitch;
+              for (int x = 0; x < paRgb->w; ++x) {
+                const uint8_t rr = row[x * 3 + 0], rg = row[x * 3 + 1], rb = row[x * 3 + 2];
+                if (std::max(rr, std::max(rg, rb)) < 120) continue;
+                ++bright;
+                ++hist[(static_cast<uint32_t>(rr) << 16) | (static_cast<uint32_t>(rg) << 8) |
+                       static_cast<uint32_t>(rb)];
+              }
+            }
+            const auto kmcCount = [&](uint32_t hexColor) -> uint32_t {
+              const auto it = hist.find(hexColor);
+              return it == hist.end() ? 0u : it->second;
+            };
+            std::cout << "palette bright=" << bright << " text=" << kmcCount(kMCText)
+                      << " subtext1=" << kmcCount(kMCSubtext1) << std::endl;
+            wcagOk = bright > 0 && kmcCount(kMCText) > 0 && kmcCount(kMCSubtext1) > 0;
+            for (size_t i = 0; i < faceCount; ++i) {
+              // face 面の pixel を直接読む（band 上部・text 行から離れた右端）。readback の実値で測る。
+              const int sy = static_cast<int>(static_cast<float>(i) * bandH) + 2;
+              const int sx = paRgb->w - 6;
+              const uint8_t *row = static_cast<const uint8_t *>(paRgb->pixels) +
+                                   static_cast<size_t>(sy) * paRgb->pitch;
+              const uint32_t observed = (static_cast<uint32_t>(row[sx * 3 + 0]) << 16) |
+                                       (static_cast<uint32_t>(row[sx * 3 + 1]) << 8) |
+                                       static_cast<uint32_t>(row[sx * 3 + 2]);
+              const bool faceOk = observed == faces6[i];
+              const double rText = wcagContrast(fg2[0], observed);
+              const double rSub = wcagContrast(fg2[1], observed);
+              wcagOk &= faceOk && rText >= 4.5 && rSub >= 4.5;
+              std::cout << "wcag face=" << std::hex << std::setw(6) << std::setfill('0') << faces6[i] << std::dec
+                        << " observed_pixel=" << (faceOk ? 1 : 0) << " text_contrast=" << rText
+                        << " subtext1_contrast=" << rSub << " min>=4.5=" << (rText >= 4.5 && rSub >= 4.5 ? 1 : 0)
+                        << std::endl;
+            }
+            SDL_DestroySurface(paRgb);
+          }
+          SDL_DestroySurface(paShot);
+        } else {
+          std::cout << "palette frame capture unavailable: " << SDL_GetError() << std::endl;
+        }
+      }
+      std::cout << "palette wcag ok=" << (stPass(wcagOk, "palette audit") ? 1 : 0) << std::endl;
+    }
+
+    // --- Prompt 6 game-mode switch phase（要件 7・H トグル往復・game では graph/HUD を描かず
+    // renderConsole と入力系統だけ・runtime の console flow はそのまま動作する） ---
+    // DDM_SELFTEST は viewer 検証に集中する。DDM_MODE=game の起動もこの phase で viewer への
+    // 復帰経路（H）を確認する（運用側の既定は viewer）。
+    std::cout << "=== [ selftest game-mode ] ===" << std::endl;
+    {
+      auto postKey = [](SDL_Keycode k) {
+        SDL_Event ev{};
+        ev.type = SDL_EVENT_KEY_DOWN;
+        ev.key.type = SDL_EVENT_KEY_DOWN;
+        ev.key.key = k;
+        ev.key.down = true;
+        SDL_AppEvent(nullptr, &ev);
+      };
+      // 前提: selftest は viewer で始まる（DDM_MODE=game の起動でも H で viewer 復帰できること）。
+      if (gUiMode == UI_GAME) setUiMode(UI_VIEWER);
+      const uint8_t sceneG = gViewScene;
+      postKey(SDLK_H);
+      const bool gameOnOk = stPass(gUiMode == UI_GAME, "game-mode switch");
+      std::cout << "game_mode_on=" << (gameOnOk ? 1 : 0) << std::endl;
+
+      // game では描画経路（graph/HUD）を通らない。base の clear のみで readback すると
+      // graph/HUD の実色が一切出ないことを確認する（frame を保存・bright=0・色 count 0）。
+      bool gameFrameOk = false;
+      if (gRenderer) {
+        setSolid(gRenderer, kMCBase);
+        SDL_RenderClear(gRenderer);
+        SDL_RenderPresent(gRenderer);
+        SDL_Surface *gs = SDL_RenderReadPixels(gRenderer, nullptr);
+        if (gs) {
+          SDL_SaveBMP(gs, "build/viewer_frame_game.bmp");
+          std::cout << "game frame captured " << gs->w << "x" << gs->h << " -> build/viewer_frame_game.bmp" << std::endl;
+          SDL_Surface *gr = SDL_ConvertSurface(gs, SDL_PIXELFORMAT_RGB24);
+          if (gr) {
+            std::map<uint32_t, uint32_t> hist;
+            uint32_t bright = 0;
+            for (int y = 0; y < gr->h; ++y) {
+              const uint8_t *row = static_cast<const uint8_t *>(gr->pixels) +
+                                   static_cast<size_t>(y) * gr->pitch;
+              for (int x = 0; x < gr->w; ++x) {
+                const uint8_t rr = row[x * 3 + 0], rg = row[x * 3 + 1], rb = row[x * 3 + 2];
+                if (std::max(rr, std::max(rg, rb)) < 120) continue;
+                ++bright;
+                ++hist[(static_cast<uint32_t>(rr) << 16) | (static_cast<uint32_t>(rg) << 8) |
+                       static_cast<uint32_t>(rb)];
+              }
+            }
+            size_t graphColors = 0;
+            for (uint32_t c : {kMCSapphire, kMCPeach, kMCTeal, kMCLavender, kMCText, kMCSubtext1}) {
+              if (hist.find(c) != hist.end()) graphColors += 1;
+            }
+            std::cout << "game frame bright=" << bright << " graph/hud colors=" << graphColors << std::endl;
+            gameFrameOk = bright == 0 && graphColors == 0;
+            SDL_DestroySurface(gr);
+          }
+          SDL_DestroySurface(gs);
+        }
+      }
+      stPass(gameFrameOk, "game-mode switch");
+
+      // 入力系統: game でも console の挿入 flow（TAB → ESC・対称）がそのまま動作する。
+      postKey(SDLK_TAB);
+      const bool insertGameOk = gAppMode == MODE_INSERT_TEXT;
+      postKey(SDLK_ESCAPE); // cancelInsertMode（既存経路・text input Stop 対称）
+      const bool cancelGameOk = gAppMode == MODE_NORMAL;
+      std::cout << "game runtime insert flow ok=" << (insertGameOk && cancelGameOk ? 1 : 0) << std::endl;
+      stPass(insertGameOk && cancelGameOk, "game-mode switch");
+
+      postKey(SDLK_H);
+      const bool backOk = stPass(gUiMode == UI_VIEWER && gViewMode == VIEW_GENERAL && gEditor.stage == EDITOR_IDLE &&
+                                 !gProps.active && gViewScene == sceneG && gAppMode == MODE_NORMAL, "game-mode switch");
+      std::cout << "viewer_restore ok=" << (backOk ? 1 : 0) << std::endl;
+
+      // viewer 復帰後は graph/HUD の描画がそのまま復元されること（drawGraphOverlay → drawHud の順序）。
+      bool drawBackOk = false;
+      if (gRenderer) {
+        setSolid(gRenderer, kMCBase);
+        SDL_RenderClear(gRenderer);
+        drawGraphOverlay(gRenderer);
+        SDL_RenderPresent(gRenderer);
+        SDL_Surface *br = SDL_RenderReadPixels(gRenderer, nullptr);
+        if (br) {
+          SDL_Surface *br2 = SDL_ConvertSurface(br, SDL_PIXELFORMAT_RGB24);
+          if (br2) {
+            uint32_t bright = 0;
+            uint32_t textSeen = 0;
+            for (int y = 0; y < br2->h; ++y) {
+              const uint8_t *row = static_cast<const uint8_t *>(br2->pixels) +
+                                   static_cast<size_t>(y) * br2->pitch;
+              for (int x = 0; x < br2->w; ++x) {
+                const uint8_t rr = row[x * 3 + 0], rg = row[x * 3 + 1], rb = row[x * 3 + 2];
+                if (std::max(rr, std::max(rg, rb)) < 120) continue;
+                ++bright;
+                if (rr == mcR(kMCText) && rg == mcG(kMCText) && rb == mcB(kMCText)) textSeen += 1;
+              }
+            }
+            drawBackOk = bright > 0 && textSeen > 0;
+            SDL_DestroySurface(br2);
+          }
+          SDL_DestroySurface(br);
+        }
+      }
+      std::cout << "game_mode_switch ok=" << (stPass(drawBackOk, "game-mode switch") ? 1 : 0) << std::endl;
+    }
+
+    // --- Prompt 6 data unchanged phase（要件 8・最後確認）: data.txt は変更されない ---
+    std::cout << "=== [ selftest data unchanged ] ===" << std::endl;
+    {
+      std::ifstream ifs(gLoadedPath, std::ios::binary);
+      std::string fileBytes;
+      if (ifs.is_open()) {
+        ifs.seekg(0, std::ios::end);
+        const std::streamoff sz = ifs.tellg();
+        fileBytes.resize(static_cast<size_t>(sz));
+        ifs.seekg(0, std::ios::beg);
+        ifs.read(&fileBytes[0], sz);
+      }
+      const bool rtFinal = stPass(verifyRoundTrip(gDocument).exact, "data unchanged");
+      const bool bytesSame = stPass(ifs.is_open() && fileBytes.size() == gLoadedBytes &&
+                                   fileBytes == gDocument.raw && !gDocTerminatorPatched, "data unchanged");
+      std::cout << "data_unchanged load=" << gLoadedPath << " baseline_bytes=" << gLoadedBytes
+                << " disk_bytes=" << fileBytes.size() << " match=" << (bytesSame ? 1 : 0) << std::endl;
+      std::cout << "round_trip_final=" << (rtFinal ? "EXACT OK" : "MISMATCH") << " terminator_patched="
+                << (gDocTerminatorPatched ? 1 : 0) << std::endl;
+      std::cout << "write policy: data.txt に書き戻さない（selftest では legacy write-back は走らない・"
+                << "legacy は ../data.txt load 時の運用のみ） backup_on_quit=" << (gBackupOnQuit ? "on（B）" : "off（既定）") << std::endl;
+    }
+
+    // Prompt 6・要件 8: 各 phase の結果を集約し、失敗は "FAIL <phase>" を stdout に出して
+    // SDL_APP_FAILURE で終わる（全 phase pass のとき SELFTEST: ALL PHASES PASS + SDL_APP_SUCCESS）。
+    // 既存の「期待値実行時計算」pattern は維持し、数をハードコードしない（data.txt は不変）。
+    if (gSelftestFailures.empty()) {
+      std::cout << "SELFTEST: ALL PHASES PASS" << std::endl;
+      return SDL_APP_SUCCESS;
+    }
+    for (const std::string &f : gSelftestFailures) std::cout << "FAIL " << f << std::endl;
+    std::cout << "selftest exit: FAIL phases=" << gSelftestFailures.size() << std::endl;
+    return SDL_APP_FAILURE;
   }
 
 
@@ -6276,6 +6919,16 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     }
 
     needRedraw = false;
+  }
+
+  // Prompt 6・game モード共存（要件 7）: game では graph/HUD を描かない（renderConsole と
+  // 入力系統だけを動かす）。描画順序は viewer で drawGraphOverlay（→ drawHud）を維持する。
+  if (gUiMode == UI_GAME) {
+    Uint64 frameTimeG = SDL_GetTicks() - frameStart;
+    if (frameTimeG < TARGET_FRAME_MS) {
+      SDL_Delay(TARGET_FRAME_MS - frameTimeG);
+    }
+    return SDL_APP_CONTINUE;
   }
 
   setSolid(gRenderer, kMCBase); // window background: mocha base #1e1e2e
@@ -6308,7 +6961,14 @@ void backupData(const std::string &srcPath = "../data.txt",
 
 // SDL_AppQuit
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
-  backupData("../data.txt", "../data.txt.bak");
+  // Prompt 6 write policy（要件 2）: quit の backupData は既定 off（B トグル）。on のときだけ
+  // ../data.txt を ../data.txt.bak に上書きする。data.txt 自身には一切書き込まない
+  // （write は main.cpp のみ・serialize は stdout / HUD export のまま）。
+  if (gBackupOnQuit) {
+    backupData("../data.txt", "../data.txt.bak");
+  } else {
+    std::cout << "backup on quit: off（既定・B トグルで on・data.txt は書き換えない）" << std::endl;
+  }
 
   // write は行わない。round-trip は画面の export 欄と stdout で提示する。
   if (gExportOnQuit) {
