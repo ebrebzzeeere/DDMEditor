@@ -733,6 +733,17 @@ std::vector<Element> containerC;
 std::vector<Element> displayList;
 std::vector<Element> objectList;
 
+// --- flavorContainer（root配信用のフレーバーテキスト） ---
+// rootで配信されるonetime quoteはすべてフレーバーテキストの役割を持つため、
+// 従来の「rootでonetime quoteを優先配信」処理に代わるものとして新設する。
+// parent == kFlavorParent (0x0F) のElementをgParentに関係なく抽出する。
+// parent以外の条件（hasRead / requiredReadId / excludedReadId / timer /
+// unlocks / eyelevel）はrebuildContainerC()と同じ判定を追う。isOnetime・
+// quote・optionの区別は抽出・選択で行わない。構築はprocessContainerLifecycle()
+// の最初期（初回起動時を含む）から行う。
+constexpr uint8_t kFlavorParent = 0x0F;
+std::vector<Element> flavorContainer;
+
 size_t selectedIndex = 0;
 size_t selectedObjectiveIndex = 0;
 bool isObjectiveSelected = false;
@@ -755,7 +766,7 @@ bool gSuspendedNoContentState = false;
 SDL_Window *gWindow = nullptr;
 SDL_Renderer *gRenderer = nullptr;
 
-unsigned gScene = 1;
+unsigned gScene = 0xe;
 unsigned gRoot = 0;
 unsigned gParent = 0;
 unsigned gUnlocks = 0;
@@ -1608,6 +1619,7 @@ bool gTickTimer() {
 
 void rebuildContainerB();
 void rebuildContainerC();
+void rebuildFlavorContainer();
 void rebuildDisplayList();
 void rebuildObjectiveList();
 void rebuildMoveDestinationList();
@@ -1701,6 +1713,8 @@ void renderConsole() {
   std::cout << "Container B (Scene Matched): " << containerB.size()
             << std::endl;
   std::cout << "Container C (Cond Matched) : " << containerC.size()
+            << std::endl;
+  std::cout << "flavorContainer               : " << flavorContainer.size()
             << std::endl;
   std::cout << "DisplayList                : " << displayList.size()
             << std::endl;
@@ -1842,27 +1856,70 @@ void rebuildContainerC() {
   }
 }
 
+// flavorContainerの構築。root配信用のフレーバーテキストを、gParentに関係なく
+// parent == kFlavorParent (0x0F) のElementから抽出する。親条件（cond1）を
+// gParent一致からkFlavorParent一致に置き換えたそれ以外の条件は
+// rebuildContainerC()と同じ判定を使う。isOnetime / isQuoteは条件に含めない。
+// 構築はprocessContainerLifecycle()から行われる。初回起動（SDL_AppInit）でも
+// この経路を通るため、root状態への最初の配信からflavorが選ばれる。
+// sendProperty()も送信後に同じ経路を通るため、追加の再構築は不要だが、
+// 送信後の状態での再構築を明示するためsendProperty()内でも呼ばれる。
+void rebuildFlavorContainer() {
+  flavorContainer.clear();
+  for (const auto &item : containerB) {
+    uint64_t prop = item.prop;
+
+    unsigned parent = getPropParent(prop);
+    bool hasRead = getPropHasRead(prop);
+    uint8_t requiredReadId = getPropRequiredReadId(prop);
+    uint8_t excludedReadId1 = getPropExcludedReadId1(prop);
+    uint8_t excludedReadId2 = getPropExcludedReadId2(prop);
+    uint8_t eyelevel = getPropEyelevel(prop);
+    bool isOnetime = getPropIsOnetime(item.prop);
+
+    bool cond1 = (parent == kFlavorParent); // gParentに関係なくフレーバー親のみ
+    bool cond2 = satisfiesRequiredReadId(requiredReadId);
+    bool cond3 = !hasRead;
+    cond3 |= !isOnetime;
+    bool cond4_1 = satisfiesExcludedReadId(excludedReadId1);
+    bool cond4_2 = satisfiesExcludedReadId(excludedReadId2);
+    bool cond4 = cond4_1 && cond4_2;
+    bool cond5 = evalCond5(prop);
+    bool cond6 = (gUnlocks & getPropRequiredUnlockFlags(prop)) ==
+                 getPropRequiredUnlockFlags(prop);
+    bool cond7 = getPropExcludedUnlockFlags(prop) == 0 ||
+                 (gUnlocks & getPropExcludedUnlockFlags(prop)) !=
+                     getPropExcludedUnlockFlags(prop);
+    bool cond8 = (gEyelevel == eyelevel) || (eyelevel == 0x0);
+
+    if (cond1 && cond2 && cond3 && cond4 && cond5 && cond6 && cond7 && cond8) {
+      flavorContainer.push_back(item);
+    }
+  }
+}
+
 void rebuildDisplayList() {
   displayList.clear();
   selectedIndex = 0;
 
+  // root状態でflavorContainerに要素があれば、isOnetime・quote・optionの区別や
+  // containerCに依存せず、その中から一つだけランダムに選んで表示する。
+  // （従来この関数で行っていた「rootでonetime・quoteを優先配信」処理は
+  // flavorContainerの役割に統合するため削除した。）
+  if (gParent == gRoot && !flavorContainer.empty()) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<size_t> dist(0, flavorContainer.size() - 1);
+    displayList.push_back(flavorContainer[dist(gen)]);
+    return;
+  }
+
+  // flavorContainerが空のときは通常通り、containerCからdisplayListを構成する。
   if (!containerC.empty()) {
     std::random_device rd;
     std::mt19937 gen(rd());
 
-    std::vector<Element> candidates;
-    for (const auto &item : containerC) {
-      bool isOnetime = getPropIsOnetime(item.prop);
-      bool isQuote = getPropIsQuote(item.prop);
-      if (isOnetime && isQuote) {
-        candidates.push_back(item);
-      }
-    }
-
-    if (!candidates.empty()) {
-      std::uniform_int_distribution<size_t> dist(0, candidates.size() - 1);
-      displayList.push_back(candidates[dist(gen)]);
-    } else if (containerC.size() >= 5) {
+    if (containerC.size() >= 5) {
       std::vector<Element> temp = containerC;
       std::shuffle(temp.begin(), temp.end(), gen);
       displayList.assign(temp.begin(), temp.begin() + 4);
@@ -2017,6 +2074,11 @@ void processContainerLifecycle() {
   rebuildContainerC();
   isObjectiveSelected = false;
 
+  // flavorContainerもcontainerB / containerCと同じタイミングで構成する。
+  // 初回起動（SDL_AppInitからのこの呼び出し）でも構成されるため、最初の
+  // root配信からflavorが候補になる。
+  rebuildFlavorContainer();
+
   if (containerC.empty()) {
     noContentState = true;
     displayList.clear();
@@ -2056,6 +2118,8 @@ void sendProperty() {
     }
 
     noContentState = false;
+    // no contentからのroot復帰後なので、ここでflavorContainerを再構築する。
+    rebuildFlavorContainer();
     rebuildDisplayList();
     rebuildObjectiveList();
     // if (gParent == gRoot) {
@@ -2178,10 +2242,22 @@ void sendProperty() {
   }
 
   processContainerLifecycle();
+
+  // 送信後の状態（newScene/newRootを含む）での再構築。flavorContainerは
+  // processContainerLifecycle()内で既に構成されているが、送信後の状態での
+  // 再構築を明示するためここで再度再構築する。root状態でのみflavorが
+  // displayListを置き換える。
+  rebuildFlavorContainer();
+  rebuildDisplayList();
+  rebuildObjectiveList();
+
   // A timer counts completed dialogue cycles, not individual selections in a
   // verb/object chain.  Advance only after returning to the current root.
+  // flavor（parent == kFlavorParent）の消費はverb・objectを経由しないため、
+  // tickを消費しない。
   if (noContentState &&
-      parent != gRoot) { // progress timer when verb to quote loop completed.
+      parent != gRoot &&
+      parent != kFlavorParent) { // progress timer when verb to quote loop completed.
     advanceTimers();
   }
   needRedraw = true;
