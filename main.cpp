@@ -86,7 +86,9 @@ downUnlocks slot value（slot1 index 3）:
 
 
 
-'dialogue', '0xHHHHHHHHHHHHHHHH',
+'dialogue', '0xHHHH|HHHH|HHHHHHHH',
+   data.txt の書き出しは prop を 2byte|2byte|4byte に区切り所定の位置に '|' を挿す。
+   読み込み時は prop 内の '|' をすべて無視する（'|' なしの旧書式も読める）。
 * */
 
 
@@ -252,7 +254,10 @@ inline uint64_t editEyelevelToggleValue(uint64_t cur, uint8_t eyelevel, uint8_t 
 // ============================================================================
 // --- Strict Document model: data.txt を 1 バイトも壊さずに保持する ---
 // ============================================================================
-// data.txt の 1 行は `'dialogue', '0xHHHHHHHHHHHHHHHH',` の形式を取る。
+// data.txt の 1 行は `'dialogue', '0xHHHH|HHHH|HHHHHHHH',` の形式を取る。
+// prop は 2byte|2byte|4byte に 3 分割し、所定の位置に '|' を挿す（書き出し書式）。
+// 読み込みに際しては prop 内の '|' をすべて無視するため、旧書の
+// `'dialogue', '0xHHHHHHHHHHHHHHHH',`（'|' なし）もそのまま読める。
 // 既存の whitespace-token parser は dialogue の空白・'・日本語を分解してしまうため、
 // 行単位で quoted string と hex prop を安全に解析する parser を使う。
 // comment line / blank line は graph に含めないが、serialize では原文のまま復元する。
@@ -309,19 +314,31 @@ inline bool isCommentLine(const std::string &line) {
 // `'dialogue', '0xHEX',` を 1 行から解析する。dialogue に ' が混在する可能性があるため
 // greedy な (.*) を使い、末尾锚定点と組み合わせることで「最も後ろの valid な区切り」を
 // prop として選ぶ。trailing comma は optional にして旧ファイルの揺らぎも許容する。
+// 書き出しは 2byte|2byte|4byte 区切り（'0xHHHH|HHHH|HHHHHHHH'）だが、読み込みでは
+// prop 内の '|' をすべて無視して 16 桁以下の hex として解析する（'|' なしの旧書式も可）。
 inline bool parseElementLine(const std::string &line, std::string &dialogueOut,
                              uint64_t &propOut) {
-  static const std::regex quotedHex(
-      "^[ \t]*'(.*)'[ \t]*,[ \t]*'0x([0-9a-fA-F]{1,16})'[ \t]*,?[ \t]*$");
-  static const std::regex quotedBareHex(
-      "^[ \t]*'(.*)'[ \t]*,[ \t]*'([0-9a-fA-F]{1,16})'[ \t]*,?[ \t]*$");
+  static const std::regex quotedProp(
+      "^[ \t]*'(.*)'[ \t]*,[ \t]*'([^']*)'[ \t]*,?[ \t]*$");
   std::smatch m;
-  if (!std::regex_match(line, m, quotedHex) &&
-      !std::regex_match(line, m, quotedBareHex)) {
+  if (!std::regex_match(line, m, quotedProp)) {
     return false;
   }
+  // prop token: まず '|' をすべて除去し、optional な '0x' prefix を取り除いて
+  // 旧 parser と同じ「1〜16 桁の hex」を検証してから値化する。
+  std::string hex;
+  for (char c : m[2].str()) {
+    if (c != '-') hex += c; // prop 内の '|' はすべて無視
+  }
+  if (hex.size() >= 2 && hex[0] == '0' && hex[1] == 'x') {
+    hex.erase(0, 2);
+  }
+  if (hex.empty() || hex.size() > 16) return false;
+  for (char c : hex) {
+    if (!std::isxdigit(static_cast<unsigned char>(c))) return false;
+  }
   dialogueOut = m[1].str();
-  propOut = std::stoull(m[2].str(), nullptr, 16);
+  propOut = std::stoull(hex, nullptr, 16);
   return true;
 }
 
@@ -390,6 +407,7 @@ bool loadDocument(const std::string &path, Document &doc,
 }
 
 // 編集した Element の raw line 再生成用。lower case・16桁・'0x' prefix。
+// （HUD / stdout の prop=0x 表示はパイプなしの 16 桁のまま使う。）
 inline std::string formatPropHex16(uint64_t prop) {
   char buf[20];
   std::snprintf(buf, sizeof(buf), "%016llx",
@@ -397,7 +415,15 @@ inline std::string formatPropHex16(uint64_t prop) {
   return std::string(buf);
 }
 
-// 未編集の行は原文をそのまま、dirty な Element 行のみ `'dialogue', '0xHEX',` に
+// data.txt 書き出し用の prop 書式。16 桁 hex の所定の位置（2byte|2byte|4byte）に
+// '|' を挿入する: 'HHHH|HHHH|HHHHHHHH'。値は formatPropHex16 と同一で、
+// parseElementLine は '|' をすべて無視して同じ値に戻す。
+inline std::string formatPropHex16Piped(uint64_t prop) {
+  const std::string hex = formatPropHex16(prop);
+  return hex.substr(0, 4) + "-" + hex.substr(4, 4) + "-" + hex.substr(8, 8);
+}
+
+// 未編集の行は原文をそのまま、dirty な Element 行のみ `'dialogue', '0xHHHH|HHHH|HHHHHHHH',` に
 // 再生成する。comment / blank line は原文のまま。terminator は原文の改行を再現するので、
 // 未編集の Document では serializeDocument() == Document::raw が成立する。
 std::string serializeDocument(const Document &doc) {
@@ -407,7 +433,7 @@ std::string serializeDocument(const Document &doc) {
     if (line.kind == LINE_ELEMENT && line.elementIndex >= 0 &&
         doc.elements[line.elementIndex].dirty) {
       const Element &e = doc.elements[line.elementIndex].element;
-      out += "'" + e.dialogue + "', '0x" + formatPropHex16(e.prop) + "',";
+      out += "'" + e.dialogue + "', '0x" + formatPropHex16Piped(e.prop) + "',";
     } else {
       out += line.text;
     }
@@ -3510,7 +3536,7 @@ void editorCommitAdd() {
                         gEditor.childOptionSelected ? gEditor.childId : 0);
 
   RawLine line;
-  line.text = "'" + gEditor.dialogue + "', '0x" + formatPropHex16(prop) + "',"; // 正格式（lowercase 16桁・trailing comma）
+  line.text = "'" + gEditor.dialogue + "', '0x" + formatPropHex16Piped(prop) + "',"; // 正格式（lowercase 16桁・2|2|4区切りパイプ・trailing comma）
   line.kind = LINE_ELEMENT;
   line.elementIndex = static_cast<int>(gDocument.elements.size());
   if (!gDocument.lines.empty() && gDocument.lines.back().terminator.empty()) {
@@ -3580,7 +3606,7 @@ void editorRestoreToBaseline(size_t targetLines, size_t targetElements) {
 // 編集は Document / Graph にだけ反映し runtime state に自動同期しない（Prompt4 の G トグルとは別）。
 // graph 再構築経路は editorCommitAdd と同じ: buildGraph → applyActiveLayout →
 // 選択は (scene,id) key を gGraph.findNode で復元する。dirty=true の行再生成は
-// serializeDocument と同じ正格式（lowercase 16桁・trailing comma）で行う。
+// serializeDocument と同じ正格式（lowercase 16桁・2|2|4区切りパイプ・trailing comma）で行う。
 // validation: 範囲外は clamp + warning、target id が現 scene に無い場合は warning +
 // constraint viewer の ghost で確認できる（countConstraintEdges・配線追加不要）、
 // slot の option は index が 1 つなので構造上排他（同一 slot に複数 option は立てられない）。
@@ -3648,9 +3674,9 @@ void propsCommit(const uint64_t newProp, const std::vector<std::string> &warning
   const uint64_t oldProp = rec.element.prop;
   rec.element.prop = newProp;
   rec.dirty = true;
-  // 正格式再生成（追加行の format と同じ規則・lowercase 16桁・trailing comma・dialogue 原文のまま）。
+  // 正格式再生成（追加行の format と同じ規則・lowercase 16桁・2|2|4区切りパイプ・trailing comma・dialogue 原文のまま）。
   gDocument.lines[rec.lineIndex].text =
-      "'" + rec.element.dialogue + "', '0x" + formatPropHex16(newProp) + "',";
+      "'" + rec.element.dialogue + "', '0x" + formatPropHex16Piped(newProp) + "',";
 
   gProps.nodeKey = propsNodeKeyOf(newProp);
   buildGraph(gDocument, gGraph);
@@ -4083,7 +4109,7 @@ void drawEditorOverlay(SDL_Renderer *r) {
                           gEditor.childOptionSelected ? gEditor.childId : 0);
     if (gEditor.stage >= EDITOR_QUOTE) {
       rows.push_back({"final prop hex=0x" + formatPropHex16(prop), kMCSubtext1});
-      rows.push_back({"planned raw line: '" + gEditor.dialogue + "', '0x" + formatPropHex16(prop) + "',", kMCSubtext0});
+      rows.push_back({"planned raw line: '" + gEditor.dialogue + "', '0x" + formatPropHex16Piped(prop) + "',", kMCSubtext0});
     }
     rows.push_back({"baseline(raw) lines=" + std::to_string(gRoundTrip.baselineLines) +
                     " → document lines=" + std::to_string(gDocument.lines.size()) +
@@ -4872,8 +4898,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     // --- Prompt 6 round-trip baseline phase（要件 2・FAIL 検知に格上げ + 強化検証） ---
     // load 直後の baseline を保存し（Document::raw は load 時のまま）、編集/追加後の diff が
     // dirty/added 行のみであることを各 phase で検証する（RoundTripReport の added/edited）。
-    // terminator（"\n" / "\r\n" / ""）保持・正格式（quote・'0x'・lowercase16・trailing comma）・
-    // hasRead/dummy prop の load-time 保持をここで確認する。期待値はその場で合成する。
+    // terminator（"\n" / "\r\n" / ""）保持・正格式（quote・'0x'・lowercase16・2|2|4区切りパイプ・
+    // trailing comma）・hasRead/dummy prop の load-time 保持をここで確認する。期待値はその場で合成する。
     std::cout << "=== [ selftest round-trip baseline ] ===" << std::endl;
     {
       const RoundTripReport rtBase = verifyRoundTrip(gDocument);
@@ -4898,16 +4924,25 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                 << " unterminated_lines=" << unterminated << std::endl;
 
       // 正格式の规则（再生成・追加行と同じ规则で検証する）: quote 形式・trailing comma・
-      // '0x' prefix・lowercase 16 桁。合成→再パースの往復をその場で合成した値で確認する。
+      // '0x' prefix・lowercase 16 桁・2byte|2byte|4byte の '|' 区切り。合成→再パースの往復を
+      // その場で合成した値で確認する（パイプあり・なしの両形式が同一値に復元されること）。
       const uint64_t fmtSample = 0x001000000010021dULL; // id=0x21 parent=0x10（他 bit 0 の合成例）
       const std::string fmtHex = formatPropHex16(fmtSample);
-      const std::string fmtLine = "'fmt probe', '0x" + fmtHex + "',";
+      const std::string fmtPiped = formatPropHex16Piped(fmtSample);
+      const std::string fmtLine = "'fmt probe', '0x" + fmtPiped + "',";
       std::string fmtD;
       uint64_t fmtP = 0;
+      std::string fmtDLegacy;
+      uint64_t fmtPLegacy = 0;
       const bool fmtOk = stPass(fmtHex.size() == 16 && fmtHex == "001000000010021d" &&
-                                parseElementLine(fmtLine, fmtD, fmtP) && fmtP == fmtSample &&
-                                fmtD == "fmt probe", "round-trip baseline");
-      std::cout << "canonical_format lower16_comma_0x match=" << (fmtOk ? 1 : 0)
+                                 fmtPiped == "0010|0000|0010021d" &&
+                                 parseElementLine(fmtLine, fmtD, fmtP) && fmtP == fmtSample &&
+                                 fmtD == "fmt probe" &&
+                                 parseElementLine("'fmt probe', '0x" + fmtHex + "',",
+                                                  fmtDLegacy, fmtPLegacy) &&
+                                 fmtPLegacy == fmtSample && fmtDLegacy == "fmt probe",
+                                 "round-trip baseline");
+      std::cout << "canonical_format pipe_split_2_2_4_0x_comma match=" << (fmtOk ? 1 : 0)
                 << " sample='" << fmtLine << "'" << std::endl;
 
       // hasRead をクリアしない・dummy 行の prop も原値を保持: containerA は load-time prop のまま。
@@ -5692,7 +5727,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                             parseElementLine(addedLine.text, reDialogue, reProp);
       const uint64_t expectedProp1 =
           composeEditorProp(static_cast<uint8_t>(exp1.second), 0, addScene, false, false, 0);
-      const std::string expectedText1 = "'" + dialogue1 + "', '0x" + formatPropHex16(expectedProp1) + "',";
+      const std::string expectedText1 = "'" + dialogue1 + "', '0x" + formatPropHex16Piped(expectedProp1) + "',";
       const bool formatOk = addedLine.text == expectedText1 && reparsed && reProp == expectedProp1 &&
                             reDialogue == dialogue1 && getPropParent(reProp) == 0 &&
                             getPropChild(reProp) == 0 && getPropID(reProp) == static_cast<uint8_t>(exp1.second) &&
@@ -5701,7 +5736,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       std::cout << "editor_add1 id=" << exp1.second << " scene=" << hexNibble(addScene)
                 << " assigned_ok=" << (assignedOk ? 1 : 0) << " quote_stage_stop_text_ok=" << (quoteStageOk ? 1 : 0)
                 << " added_line=" << (addedOne ? 1 : 0)
-                << " format_exact_lower16_comma=" << (addedLine.text == expectedText1 ? 1 : 0)
+                << " format_exact_pipe_split_lower16_comma=" << (addedLine.text == expectedText1 ? 1 : 0)
                 << " reparse_ok=" << (reparsed ? 1 : 0) << " prop_ok=" << (formatOk ? 1 : 0)
                 << " child_none_getPropChild=0" << std::endl;
 
@@ -5789,7 +5824,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
       const bool prop2Ok = reparsed2 && reProp2 == expectedProp2 && reDialogue2 == dialogue2 &&
                            getPropParent(reProp2) == parentId && getPropChild(reProp2) == childId &&
                            getSlotIndex(reProp2, 1) == 0 && getSlotValue(reProp2, 1) == childId &&
-                           addedLine2.text == "'" + dialogue2 + "', '0x" + formatPropHex16(expectedProp2) + "',";
+                           addedLine2.text == "'" + dialogue2 + "', '0x" + formatPropHex16Piped(expectedProp2) + "',";
       const int newIdx2 = gGraph.findNode(addScene, static_cast<uint8_t>(exp2.second));
       bool childEdgeOk = false;
       if (newIdx2 >= 0 && childPick >= 0) {
@@ -6207,7 +6242,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         std::string reD; uint64_t reP = 0;
         reparseOk = rl.kind == LINE_ELEMENT && parseElementLine(rl.text, reD, reP) && reP == propsCurrentProp() &&
                     rl.text == "'" + gDocument.elements[gGraph.nodes[idxNow].elementIndex].element.dialogue +
-                               "', '0x" + formatPropHex16(propsCurrentProp()) + "',";
+                               "', '0x" + formatPropHex16Piped(propsCurrentProp()) + "',";
       }
       postKey(SDLK_U); // undo（旧 prop を完全復元・line text/dirty も戻る）
       const bool undoRestoreOk = propsCurrentProp() == propBefore && gProps.undoStack.empty();
@@ -7089,6 +7124,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 
   // 従来の書き戻しは、load元が ../data.txt の既存運用（build/ 直下から実行）でのみ
   // 維持する。./data.txt をloadした運用では data.txt を書き換えないため書かない。
+  // 書き出しは新正格式（'0xHHHH|HHHH|HHHHHHHH'・2|2|4区切りパイプ）で行う。
   if (gLoadedPath == "../data.txt") {
     std::ofstream ofs("../data.txt");
     if (ofs.is_open()) {
@@ -7097,8 +7133,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
           item.prop &= ~(1ULL << 16); // clear hasRead (bit 16)
         }
 
-        ofs << "'" << item.dialogue << "', '0x" << std::hex << std::setw(16)
-            << std::setfill('0') << item.prop << "',\n";
+        ofs << "'" << item.dialogue << "', '0x" << formatPropHex16Piped(item.prop) << "',\n";
       }
       ofs.close();
     }
