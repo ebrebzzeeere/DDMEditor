@@ -16,6 +16,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 file(GLOB_RECURSE LIB_SOURCE
 	"./main.cpp"
+	"./prop.cpp"
+	"./document.cpp"
 
 )
 add_executable(DDMEditor ${LIB_SOURCE})

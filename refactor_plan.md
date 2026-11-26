@@ -273,4 +273,13 @@ DDMEditor リファクタリングの最終セッションです（refactor_plan
 - 注意・仕様変更なし確認の要点:
 ```
 
-- Session 1: *(未実施)*
+### Session 1 — 2026-11-26
+- 実施内容: baseline 取得（リファクタリング前 HEAD 6f56899 でビルド＋selftest 2回実行・出力完全一致を確認）。prop.h/prop.cpp に Element・prop bit レイアウト文書コメント・getProp*/hasProp*/getSlot*/setProp*/setSlot*/edit*Value（inline のまま原文のまま）と buildProperty（定義のみ prop.cpp、宣言は prop.h）を移動。document.h/document.cpp に Strict Document モデル（LineKind/RawLine/ElementRecord/Document/RoundTripReport はヘッダ、loadDocument/serializeDocument/verifyRoundTrip/printDocumentToStdout/backupData は定義を document.cpp、inline ヘルパー hexByte/hexNibble/isCommentLine/parseElementLine/formatPropHex16/formatPropHex16Piped はヘッダ）を移動。main.cpp は prop.h/document.h を include のみ。ロジック・identifier・出力文言は全て原文のまま（移動は行単位の転写のみ、transcribe 検証済み）。
+- 作成/変更ファイル: prop.h(236行), prop.cpp, document.h(147行), document.cpp, main.cpp(7148→6599行), CMakeLists.txt(LIB_SOURCE に prop.cpp/document.cpp 追加。Gimmick.cpp は元から build 外 → 変更なし)
+- 検証結果: build PASS / selftest 照合 PASS（正規化後 diff 0行・exit=1 は baseline と一致）/ data.txt unchanged（git status に現れない）/ 通常起動スモーク: dummy driver で 3 秒以上生存・起動ログ正常
+- baseline 保存先: `.cache/refactor_baseline/`（gitignore 対象）に baseline_selftest.txt(702行)・baseline_exit.txt(=1)・normalize.sed（ルールなし=恒等。2回実行で出力が完全一致し非決定行なし）。以後の照合は `SDL_VIDEO_DRIVER=dummy DDM_SELFTEST=1 ./build/DDMEditor` をリポジトリルートで実行し、`sed -f .cache/refactor_baseline/normalize.sed` → baseline と diff（空が必須）、exit code は baseline_exit.txt と一致させる。
+- 未解決事項・次のセッションへの指示:
+  - **HEAD の時点から selftest の `round-trip baseline` phase が FAIL（exit=1, phases=1）**。原因はコード内の既存の不整合: `formatPropHex16Piped` と `parseElementLine` は区切り文字 `-` を使用（data.txt の実書式も `-`）だが、selftest の canonical_format 検査は `'0010|0000|0010021d'`（`|`）を期待している（main.cpp 旧 L4937-4938）。リファクタリングは動作を変えてはいけないので **修正していない**。照合基準は exit=1・`FAIL round-trip baseline`・他 9 phase PASS の出力そのもの。`ALL PHASES PASS` にするには動作変更（selftest 期待値 or 区切り文字の統一）が必要で、リファクタリング範囲外 — ユーザーの判断事項として残す。§2/§4 の「パイプ区切り」記述は実コード・data.txt は `-` である点に注意（コメント原文のまま移動済み）。
+  - Session 2+: `state.h` 経由の extern 化に進む。main.cpp の残りの行番号は大幅にずれている（§2 の行番号は参考、セクションコメント境界で探す）。
+  - backupData の既定値は document.h の宣言側のみ定義（定義側で重複指定するとコンパイルエラー）。挙動は同一（無指定呼び backupData() も既定値が適用される）。
+- 注意・仕様変更なし確認の要点: prop bit レイアウト文書・正格式コメント・write policy・keymap・selftest 出力はすべて未変更。build 対象は main+prop+document の 3 TU のみ（Gimmick 除外は現状維持）。実行はリポジトリルートから（./data.txt 解決）。環境メモ: ccache はワークスペース外に書くため、サンドボックス環境ではビルドにワークスペース外の書き込み許可が必要（通常環境では無関係）。
