@@ -24,6 +24,7 @@ slot1Index:
   0: child
   1: excludedReadId
   2: newRoot
+  3: downUnlocks
 
 slot2Index:
   0: timerSetter
@@ -50,6 +51,10 @@ timerSetter slot value:
 eyelevelToggle slot value:
   bits 0-3 eyelevel
   bits 4-7 toggleEyelevel
+
+downUnlocks slot value（slot1 index 3）:
+  bits 0-7 mask（送信時に gUnlocks &= ~mask で指定bitだけを下げる）
+
 */
 
 いろんな条件

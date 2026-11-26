@@ -89,6 +89,7 @@ cd build && ./DDMEditor      # build/ 直下から実行
 | 1 | 0 | child | 送信時に子として descend する id |
 | 1 | 1 | excludedReadId | 「未読」必須の id |
 | 1 | 2 | newRoot | 送信時に `gRoot` へ立てる id（unlocks/eyelevel/tick をリセット） |
+| 1 | 3 | downUnlocks | 8bit mask。送信時に `gUnlocks &= ~mask` で指定bitのフラグだけを下げる（id ターゲットではない・target 不在の warning なし） |
 | 2 | 0 | timerSetter | value bits0–1: timerId(0–3), bits2–3: vacant(保持), bits4–5: action(0=none,1=start,2=stop,3=reset) |
 | 2 | 1 | unlocks | 送信時に OR（slot0 unlocks と OR 結合） |
 | 2 | 2 | requiredUnlockFlags | `gUnlocks` に含まれていなければ表示不可 |
@@ -197,7 +198,7 @@ panel open 中は `+/-`（ズーム）・`ENTER`（add flow）・`ESC`（選択�
 1. **basic flags**: hasRead(bit16) / isQuote(bit17) / isOnetime(bit18) / vacant(bit19)
 2. **id/parent/scene**: id(0x00–0xFF) / parent(0x00–0xFF, 0=root) / scene(0x0–0xF)
 3. **slot0**: option(none/requiredReadId/unlocks) / value
-4. **slot1**: option(none/child/excludedReadId/newRoot・排他) / value
+4. **slot1**: option(none/child/excludedReadId/newRoot/downUnlocks・排他) / value
 5. **slot2**: option(none/timerSetter/unlocks/requiredUnlockFlags/excludedReadId) / value + timerSetter の timerId・action（部分フィールド）
 6. **slot3**: option(none/timerTarget/newScene/excludedUnlockFlags/eyelevelToggle) / value + timerTarget の operator・timerId・count、eyelevel・toggleEyelevel（部分フィールド）
 
@@ -294,7 +295,7 @@ dummy が条件を満たすと最優先で処理され（タイマーリセッ�
 7. child なし → `gParent = id`。
 8. **hasRead 立上げ**: containerA の同 dialogue・同 prop の要素に bit16 を立てる（isOnetime でなくても立上げるが表示は継続される）。
 9. **newScene != 0**: `gScene = newScene`、gRoot/gParent/gUnlocks/gEyelevel/gTick をリセット。
-10. そうでなければ `gUnlocks |= slot0 unlocks | slot2 unlocks`、toggleEyelevel != 0 なら `gEyelevel = toggleEyelevel`、newRoot != 0 なら `gRoot = newRoot` かつ unlocks/gEyelevel/gTick をリセット。
+10. そうでなければ `gUnlocks |= slot0 unlocks | slot2 unlocks` の後に `gUnlocks &= ~slot1 downUnlocks`（同じbitの up/down 競合では down が勝つ）、toggleEyelevel != 0 なら `gEyelevel = toggleEyelevel`、newRoot != 0 なら `gRoot = newRoot` かつ unlocks/gEyelevel/gTick をリセット。
 11. lifecycle 再構築（containerB/C、displayList、objectList）。**noContentState かつ選んだ要素の parent が現在の gRoot ででないとき**（= verb→quote の往輪が root に戻って完了したとき）タイマーを進める（`advanceTimers()`）。
 
 ### タイマー（0〜3）

@@ -52,6 +52,7 @@ slot1Index:
   0: child
   1: excludedReadId
   2: newRoot
+  3: downUnlocks
 
 slot2Index:
   0: timerSetter
@@ -78,6 +79,9 @@ timerSetter slot value:
 eyelevelToggle slot value:
   bits 0-3 eyelevel
   bits 4-7 toggleEyelevel
+
+downUnlocks slot value（slot1 index 3）:
+  bits 0-7 mask（送信時に gUnlocks &= ~mask で指定bitだけを下げる）
 
 
 
@@ -107,7 +111,7 @@ inline uint8_t getPropSlot0Unlocks(uint64_t prop) {
 }
 
 // Slot 1: bits 40-47, index: bits 26-27
-// (0: child, 1: excludedReadId, 2: newRoot)
+// (0: child, 1: excludedReadId, 2: newRoot, 3: downUnlocks)
 inline uint8_t getPropChild(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 0) ? ((prop >> 40) & 0xFF) : 0;
 }
@@ -123,6 +127,14 @@ inline uint8_t getPropExcludedReadId(uint64_t prop) {
 }
 inline uint8_t getPropNewRoot(uint64_t prop) {
   return (((prop >> 26) & 0x3) == 2) ? ((prop >> 40) & 0xFF) : 0;
+}
+// downUnlocks mask（slot1 index 3・value bits 0-7）。送信時に gUnlocks &= ~mask で
+// 指定したbitのフラグだけを下げる。value 0 は none（どのbitも下げない）。
+inline uint8_t getPropSlot1DownUnlocks(uint64_t prop) {
+  return (((prop >> 26) & 0x3) == 3) ? ((prop >> 40) & 0xFF) : 0;
+}
+inline uint8_t getPropDownUnlocks(uint64_t prop) {
+  return getPropSlot1DownUnlocks(prop);
 }
 
 // Slot 2: bits 48-55, index: bits 28-29
@@ -201,7 +213,7 @@ inline uint8_t getSlotValue(uint64_t prop, uint8_t slot) {
 //   timerSetter value = timerId(bits0-1) | action(bits4-5<<4)（vacant bits2-3 は保持する）
 //   timerTarget  value = operator(bits0-1) | timerId(bits2-3<<2) | count(bits4-7<<4)
 //   eyelevelToggle value = eyelevel(bits0-3) | toggleEyelevel(bits4-7<<4)
-//   flags/unlocks/required/excluded = bits0-7 の mask、
+//   flags/unlocks/downUnlocks/required/excluded = bits0-7 の mask、
 //   newScene/child/excludedReadId/requiredReadId = 素の 8bit value。
 inline uint64_t setPropBit(uint64_t prop, int bit, bool v) {
   return v ? (prop | (1ULL << bit)) : (prop & ~(1ULL << bit));
@@ -879,7 +891,8 @@ struct PropsFieldDef {
 
 // slot option の表示名（read helpers の option 対応と同じ順。names[idx+1] = index idx の option）。
 static const char *const kSlotOptionNames0[] = {"none", "requiredReadId", "unlocks"};
-static const char *const kSlotOptionNames1[] = {"none", "child", "excludedReadId", "newRoot"};
+static const char *const kSlotOptionNames1[] = {"none", "child", "excludedReadId", "newRoot",
+                                               "downUnlocks"};
 static const char *const kSlotOptionNames2[] = {"none", "timerSetter", "unlocks",
                                                 "requiredUnlockFlags", "excludedReadId"};
 static const char *const kSlotOptionNames3[] = {"none", "timerTarget", "newScene",
@@ -898,7 +911,7 @@ inline const char *const *slotOptionNames(uint8_t slot) {
 inline uint8_t slotOptionCount(uint8_t slot) {
   switch (slot) {
     case 0: return 2;
-    case 1: return 3;
+    case 1: return 4; // child / excludedReadId / newRoot / downUnlocks（index 0-3）
     case 2: return 4;
     default: return 4;
   }
@@ -923,7 +936,7 @@ static const PropsFieldDef kPropsFields[] = {
   {"id/parent/scene", "scene(bits20-23)", PF_UINT, ROLE_PLAIN, 20, 4, 0, 0x0F, nullptr, 0},
   {"slot0", "slot0 option(none/requiredReadId/unlocks)", PF_OPTION, ROLE_PLAIN, 24, 2, 0, 0x3, kSlotOptionNames0, 2},
   {"slot0", "slot0 value(bits32-39)", PF_UINT, ROLE_TARGET, 32, 8, 0, 0xFF, nullptr, 0},
-  {"slot1", "slot1 option(none/child/excluded/newRoot・排他)", PF_OPTION, ROLE_PLAIN, 26, 2, 1, 0x3, kSlotOptionNames1, 3},
+  {"slot1", "slot1 option(none/child/excluded/newRoot/downUnlocks・排他)", PF_OPTION, ROLE_PLAIN, 26, 2, 1, 0x3, kSlotOptionNames1, 4},
   {"slot1", "slot1 value(bits40-47)", PF_UINT, ROLE_TARGET, 40, 8, 1, 0xFF, nullptr, 0},
   {"slot2", "slot2 option(none/timerSetter/unlocks/reqUnlock/excluded)", PF_OPTION, ROLE_PLAIN, 28, 2, 2, 0x3, kSlotOptionNames2, 4},
   {"slot2", "slot2 value(bits48-55)", PF_UINT, ROLE_TARGET, 48, 8, 2, 0xFF, nullptr, 0},
@@ -2170,6 +2183,7 @@ void sendProperty() {
   bool isOnetime = getPropIsOnetime(prop);
   unsigned unlocks0 = getPropSlot0Unlocks(prop);
   unsigned unlocks2 = getPropSlot2Unlocks(prop);
+  unsigned downUnlocks1 = getPropSlot1DownUnlocks(prop);
   uint8_t toggleEyelevel = getPropToggleEyelevel(prop);
   bool hasTimerSetter = hasPropTimerSetter(prop);
   uint8_t timerSetterId = getPropTimerSetterId(prop);
@@ -2228,6 +2242,9 @@ void sendProperty() {
     gTick = 0;
   } else {
     gUnlocks |= unlocks0 | unlocks2;
+    // downUnlocks（slot1 index 3）: unlocks の後に適用するので、同じbit_up/down が
+    // 競合した場合は down が勝つ（指定したbitのフラグだけを下げる）。
+    gUnlocks &= ~downUnlocks1;
 
     if (toggleEyelevel != 0x0) {
       gEyelevel = toggleEyelevel;
@@ -2525,9 +2542,11 @@ std::vector<std::string> describeElement(int nodeIndex, ViewMode view = VIEW_GEN
           if (val != 0) {
             if (idx == 0) s += " child=" + hexByte(val) + targetNote(val);
             else if (idx == 1) s += " excludedReadId=" + hexByte(val) + targetNote(val);
-            else s += " newRoot=" + hexByte(val) + targetNote(val);
+            else if (idx == 2) s += " newRoot=" + hexByte(val) + targetNote(val);
+            else s += " downUnlocks=" + hexByte(val) + " bin=" + binaryByte(val) +
+                     "（送信時に gUnlocks &= ~mask で立っているbitだけを下げる）";
           } else {
-            s += " -> none（child/excluded/newRoot は排他・value 0 で none）";
+            s += " -> none（child/excluded/newRoot/downUnlocks は排他・value 0 で none）";
           }
           break;
         case 2:
@@ -2604,7 +2623,8 @@ std::vector<std::string> describeElement(int nodeIndex, ViewMode view = VIEW_GEN
                   " unlocks=" + hexByte(getPropSlot0Unlocks(prop)));
   lines.push_back("slot1 child=" + hexByte(getPropChild(prop)) + " excludedReadId=" +
                   hexByte(getPropSlot1ExcludedReadId(prop)) + " newRoot=" +
-                  hexByte(getPropNewRoot(prop)));
+                  hexByte(getPropNewRoot(prop)) + " downUnlocks=" +
+                  hexByte(getPropSlot1DownUnlocks(prop)));
   lines.push_back("slot2 timerSetter=" + hexByte(getPropTimerSetter(prop)) +
                   " unlocks=" + hexByte(getPropSlot2Unlocks(prop)) +
                   " requiredUnlockFlags=" + hexByte(getPropRequiredUnlockFlags(prop)) +
@@ -3698,9 +3718,10 @@ std::vector<std::string> propsValidateEdit(const PropsFieldDef &f, uint64_t newP
       if (slot == 0 && idx == 0) targetWarn("requiredReadId", val);
       else if (slot == 1) {
         // child / excludedReadId / newRoot は排他（idx が 1 つ）なので立てた option だけを検査する。
+        // idx 3 の downUnlocks は mask（id target ではない）なので target 不在の warning を作らない。
         if (idx == 0) targetWarn("child", val);
         else if (idx == 1) targetWarn("excluded(slot1)", val);
-        else targetWarn("newRoot", val);
+        else if (idx == 2) targetWarn("newRoot", val);
       } else if (slot == 2 && idx == 3) {
         targetWarn("excluded(slot2)", val);
       }
@@ -3954,11 +3975,14 @@ std::vector<std::pair<std::string, uint32_t>> propsMenuRows() {
           const uint8_t idx = getSlotIndex(prop, f.slot);
           const uint8_t val = getSlotValue(prop, f.slot);
           if (val != 0) {
-            const bool isIdTarget = (f.slot == 0 && idx == 0) || f.slot == 1 ||
+            // slot1 idx3 の downUnlocks は mask（id target ではない）→ present/ghost 注記を出さない。
+            const bool isIdTarget = (f.slot == 0 && idx == 0) || (f.slot == 1 && idx != 3) ||
                                     (f.slot == 2 && idx == 3);
             if (isIdTarget) {
               s += gGraph.findNode(getPropScene(prop), val) >= 0 ? "（target present）"
                                                                  : "（target ghost）";
+            } else if (f.slot == 1 && idx == 3) {
+              s += "（downUnlocks mask・送信時に gUnlocks &= ~" + binaryByte(val) + "）";
             }
           } else {
             s += "（none・value 0）";
@@ -6022,6 +6046,11 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         rtOk &= getPropSlot1ExcludedReadId(p) == 0x12 && getPropChild(p) == 0 && getPropNewRoot(p) == 0;
         p = setSlotIndex(p, 1, 2);
         rtOk &= getPropNewRoot(p) == 0x12 && getPropChild(p) == 0 && getPropSlot1ExcludedReadId(p) == 0;
+        // slot1 index 3: downUnlocks（mask・他の option は 0・unlocks 側にも漏れない）
+        p = setSlotIndex(p, 1, 3);
+        rtOk &= getPropSlot1DownUnlocks(p) == 0x12 && getPropDownUnlocks(p) == 0x12 &&
+                getPropNewRoot(p) == 0 && getPropChild(p) == 0 &&
+                getPropSlot1ExcludedReadId(p) == 0;
         // slot2: timerSetter（vacant bits2-3 保持）/ unlocks / requiredUnlockFlags / excluded
         const uint64_t tvac = 0x0C; // value bits2-3 = 0b11（vacant・保持される）
         uint64_t tv = editTimerSetterValue(tvac, 2, 3); // timerId(bits0-1)=2, action(bits4-5)=3
@@ -6429,6 +6458,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         optionsOk &= propsApplyFieldValue(fSlot1Val, presentF, true) && getPropNewRoot(propsCurrentProp()) == presentF &&
                      gGraph.newRootTargets.size() >= 1 && warnDeltaOk(0);
         optionsOk &= propsSetOption(fSlot1Opt, 0) && getPropNewRoot(propsCurrentProp()) == 0 && warnDeltaOk(0);
+        // slot1 downUnlocks（value は mask・id target 検査がないので warning 0）
+        optionsOk &= propsSetOption(fSlot1Opt, 4) && getSlotIndex(propsCurrentProp(), 1) == 3 && warnDeltaOk(0);
+        optionsOk &= propsApplyFieldValue(fSlot1Val, 0x2A, true) &&
+                     getPropSlot1DownUnlocks(propsCurrentProp()) == 0x2A &&
+                     getPropNewRoot(propsCurrentProp()) == 0 && warnDeltaOk(0);
+        optionsOk &= propsSetOption(fSlot1Opt, 0) && getPropSlot1DownUnlocks(propsCurrentProp()) == 0 &&
+                     getSlotValue(propsCurrentProp(), 1) == 0 && warnDeltaOk(0);
         // slot2 unlocks / requiredUnlockFlags / excluded
         optionsOk &= propsSetOption(fSlot2Opt, 2) && getSlotIndex(propsCurrentProp(), 2) == 1 && warnDeltaOk(0);
         optionsOk &= propsApplyFieldValue(fSlot2Val, 0x11, true) && getPropSlot2Unlocks(propsCurrentProp()) == 0x11 && warnDeltaOk(0);
