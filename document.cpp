@@ -1,7 +1,18 @@
 #include "document.h"
-
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <string>
+#include <utility>
+#include <vector>
+#include "prop.h"
+#include "state.h"
+#include "guitext.h"
+
+
+
+
 
 bool loadDocument(const std::string &path, Document &doc,
                   std::vector<std::string> &warnings) {
@@ -67,7 +78,7 @@ bool loadDocument(const std::string &path, Document &doc,
   return true;
 }
 
-// 未編集の行は原文をそのまま、dirty な Element 行のみ `'dialogue', '0xHHHH|HHHH|HHHHHHHH',` に
+// 未編集の行は原文をそのまま、dirty な Element 行のみ `'dialogue', '0xHHHH-HHHH-HHHHHHHH',` に
 // 再生成する。comment / blank line は原文のまま。terminator は原文の改行を再現するので、
 // 未編集の Document では serializeDocument() == Document::raw が成立する。
 std::string serializeDocument(const Document &doc) {
@@ -187,4 +198,27 @@ void backupData(const std::string &srcPath, const std::string &dstPath) {
                 << std::endl;
     }
   }
+}
+void printRoundTripReport(const Document &doc) {
+  const RoundTripReport rep = verifyRoundTrip(doc);
+  std::cout << "=== [ round-trip ] ===" << std::endl;
+  std::cout << "original bytes=" << rep.originalBytes
+            << " serialized bytes=" << rep.serializedBytes
+            << " lines=" << rep.lineCount << " elements=" << rep.elementLines
+            << " comments=" << rep.commentLines << " blank=" << rep.blankLines
+            << std::endl;
+  std::cout << (rep.exact ? "RESULT: EXACT MATCH (identical data.txt)"
+                          : "RESULT: MISMATCH")
+            << std::endl;
+  if (!rep.exact) {
+    std::cout << "first diff at line " << rep.firstDiffLine << std::endl;
+    std::cout << "  original:   " << rep.originalSample << std::endl;
+    std::cout << "  serialized: " << rep.serializedSample << std::endl;
+    // Prompt 4 baseline diff: load 時の baseline（Document::raw）に対し、diff が追加行＋
+    // dirty 行のみであることを報告する（firstDiffLine の意味はそのまま）。
+    std::cout << "baseline lines=" << rep.baselineLines << " added=" << rep.addedLines
+              << " edited=" << rep.editedLines << " added_or_dirty_only="
+              << (rep.diffIsAddedOrDirtyOnly ? 1 : 0) << std::endl;
+  }
+  std::cout << std::flush;
 }

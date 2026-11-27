@@ -18,6 +18,20 @@ file(GLOB_RECURSE LIB_SOURCE
 	"./main.cpp"
 	"./prop.cpp"
 	"./document.cpp"
+	"./graph.cpp"
+	"./state.cpp"
+	"./guitext.cpp"
+	"./placeholders.cpp"
+	"./game.cpp"
+	"./console.cpp"
+	"./layout.cpp"
+	"./view.cpp"
+	"./editor.cpp"
+	"./props.cpp"
+	"./hud.cpp"
+	"./input.cpp"
+	"./app.cpp"
+	"./selftest.cpp"
 
 )
 add_executable(DDMEditor ${LIB_SOURCE})
@@ -25,14 +39,6 @@ add_executable(DDMEditor ${LIB_SOURCE})
 #file(GLOB_RECURSE LIB_HEADERS "include/*.h" "src/*.h")
 
 find_package(SDL3 REQUIRED)
-add_library(FinalSTATIC STATIC IMPORTED)
-set_target_properties(FinalSTATIC PROPERTIES
-	IMPORTED_LOCATION "/home/herb1s/Projects/NEELA/Final/build/Final.a"
-)
-target_include_directories(DDMEditor PRIVATE
-	"/home/herb1s/Projects/NEELA/Final/include"
-)
-target_link_libraries(DDMEditor PRIVATE FinalSTATIC)
 target_link_libraries(DDMEditor PRIVATE SDL3::SDL3)
 
 #add_compile_definitions(NDEBUG)

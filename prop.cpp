@@ -1,4 +1,9 @@
 #include "prop.h"
+#include <cstdint>
+#include "guitext.h"
+
+
+
 
 uint64_t buildProperty(unsigned id, unsigned parent, unsigned scene,
                        bool isQuote, bool isOnetime) {

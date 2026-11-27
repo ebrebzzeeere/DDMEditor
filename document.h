@@ -13,10 +13,10 @@
 // ============================================================================
 // --- Strict Document model: data.txt を 1 バイトも壊さずに保持する ---
 // ============================================================================
-// data.txt の 1 行は `'dialogue', '0xHHHH|HHHH|HHHHHHHH',` の形式を取る。
-// prop は 2byte|2byte|4byte に 3 分割し、所定の位置に '|' を挿す（書き出し書式）。
-// 読み込みに際しては prop 内の '|' をすべて無視するため、旧書の
-// `'dialogue', '0xHHHHHHHHHHHHHHHH',`（'|' なし）もそのまま読める。
+// data.txt の 1 行は `'dialogue', '0xHHHH-HHHH-HHHHHHHH',` の形式を取る。
+// prop は 2byte-2byte-4byte に 3 分割し、所定の位置に '-' を挿す（書き出し書式）。
+// 読み込みに際しては prop 内の '-' をすべて無視するため、旧書の
+// `'dialogue', '0xHHHHHHHHHHHHHHHH',`（'-' なし）もそのまま読める。
 // 既存の whitespace-token parser は dialogue の空白・'・日本語を分解してしまうため、
 // 行単位で quoted string と hex prop を安全に解析する parser を使う。
 // comment line / blank line は graph に含めないが、serialize では原文のまま復元する。
@@ -73,8 +73,8 @@ inline bool isCommentLine(const std::string &line) {
 // `'dialogue', '0xHEX',` を 1 行から解析する。dialogue に ' が混在する可能性があるため
 // greedy な (.*) を使い、末尾锚定点と組み合わせることで「最も後ろの valid な区切り」を
 // prop として選ぶ。trailing comma は optional にして旧ファイルの揺らぎも許容する。
-// 書き出しは 2byte|2byte|4byte 区切り（'0xHHHH|HHHH|HHHHHHHH'）だが、読み込みでは
-// prop 内の '|' をすべて無視して 16 桁以下の hex として解析する（'|' なしの旧書式も可）。
+// 書き出しは 2byte-2byte-4byte 区切り（'0xHHHH-HHHH-HHHHHHHH'）だが、読み込みでは
+// prop 内の '-' をすべて無視して 16 桁以下の hex として解析する（'-' なしの旧書式も可）。
 inline bool parseElementLine(const std::string &line, std::string &dialogueOut,
                              uint64_t &propOut) {
   static const std::regex quotedProp(
@@ -83,11 +83,11 @@ inline bool parseElementLine(const std::string &line, std::string &dialogueOut,
   if (!std::regex_match(line, m, quotedProp)) {
     return false;
   }
-  // prop token: まず '|' をすべて除去し、optional な '0x' prefix を取り除いて
+  // prop token: まず '-' をすべて除去し、optional な '0x' prefix を取り除いて
   // 旧 parser と同じ「1〜16 桁の hex」を検証してから値化する。
   std::string hex;
   for (char c : m[2].str()) {
-    if (c != '-') hex += c; // prop 内の '|' はすべて無視
+    if (c != '-') hex += c; // prop 内の '-' はすべて無視
   }
   if (hex.size() >= 2 && hex[0] == '0' && hex[1] == 'x') {
     hex.erase(0, 2);
@@ -102,7 +102,7 @@ inline bool parseElementLine(const std::string &line, std::string &dialogueOut,
 }
 
 // 編集した Element の raw line 再生成用。lower case・16桁・'0x' prefix。
-// （HUD / stdout の prop=0x 表示はパイプなしの 16 桁のまま使う。）
+// （HUD / stdout の prop=0x 表示は区切りなしの 16 桁のまま使う。）
 inline std::string formatPropHex16(uint64_t prop) {
   char buf[20];
   std::snprintf(buf, sizeof(buf), "%016llx",
@@ -110,9 +110,9 @@ inline std::string formatPropHex16(uint64_t prop) {
   return std::string(buf);
 }
 
-// data.txt 書き出し用の prop 書式。16 桁 hex の所定の位置（2byte|2byte|4byte）に
-// '|' を挿入する: 'HHHH|HHHH|HHHHHHHH'。値は formatPropHex16 と同一で、
-// parseElementLine は '|' をすべて無視して同じ値に戻す。
+// data.txt 書き出し用の prop 書式。16 桁 hex の所定の位置（2byte-2byte-4byte）に
+// '-' を挿入する: 'HHHH-HHHH-HHHHHHHH'。値は formatPropHex16 と同一で、
+// parseElementLine は '-' をすべて無視して同じ値に戻す。
 inline std::string formatPropHex16Piped(uint64_t prop) {
   const std::string hex = formatPropHex16(prop);
   return hex.substr(0, 4) + "-" + hex.substr(4, 4) + "-" + hex.substr(8, 8);
@@ -143,5 +143,6 @@ bool loadDocument(const std::string &path, Document &doc,
 std::string serializeDocument(const Document &doc);
 RoundTripReport verifyRoundTrip(const Document &doc);
 void printDocumentToStdout(const Document &doc);
+void printRoundTripReport(const Document &doc);
 void backupData(const std::string &srcPath = "../data.txt",
                 const std::string &dstPath = "../data.txt.bak");

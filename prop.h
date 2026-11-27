@@ -67,9 +67,9 @@ downUnlocks slot value（slot1 index 3）:
 
 
 
-'dialogue', '0xHHHH|HHHH|HHHHHHHH',
-   data.txt の書き出しは prop を 2byte|2byte|4byte に区切り所定の位置に '|' を挿す。
-   読み込み時は prop 内の '|' をすべて無視する（'|' なしの旧書式も読める）。
+'dialogue', '0xHHHH-HHHH-HHHHHHHH',
+   data.txt の書き出しは prop を 2byte-2byte-4byte に区切り所定の位置に '-' を挿す。
+   読み込み時は prop 内の '-' をすべて無視する（'-' なしの旧書式も読める）。
 * */
 
 

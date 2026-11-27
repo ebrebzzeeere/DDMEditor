@@ -1,6 +1,6 @@
 # DDMEditor 機能マニュアル
 
-対象: `./main.cpp`（2026-11-18 時点の現行コード、7001 行）に基づく機能マニュアルです。
+対象: リファクタリング後のモジュール構成（2026-11-27、main.cpp 薄層 + 17 モジュール）に基づく機能マニュアルです。動作・出力・仕様はリファクタリング前の単一ファイル版（7148 行）から一切変化していません（自己検証の全 phase PASS・出力差分ゼロで照合済み）。
 
 ---
 
@@ -12,7 +12,7 @@ DDMEditor は **SDL3** を使った対話型アプリで、次の 3 つの機能
 2. **フォーカスゲーム（console runtime）** — 端末 stdout に 2 段の選択コンソールを表示し、キー入力で会話グラフを「送信」しながら進行するシミュレーション（Verb / Objective の選択、条件判定、タイマー、シーン遷移）。
 3. **エディタ（EDITOR モード）** — 新しい要素行の追加（stage 入力フロー）と、既存要素の prop（64bit プロパティ）の全フィールド編集（props パネル・undo stack）。
 
-- 言語: C++20、単一ファイル `main.cpp`。SDL3 の callbacks API（`SDL_MAIN_USE_CALLBACKS`）で `SDL_AppInit / SDL_AppEvent / SDL_AppIterate / SDL_AppQuit` を実装。
+- 言語: C++20。機能単位に `.h`/`.cpp` へ分割済み（`main.cpp` は SDL callbacks の薄層）。SDL3 の callbacks API（`SDL_MAIN_USE_CALLBACKS`）で `SDL_AppInit / SDL_AppEvent / SDL_AppIterate / SDL_AppQuit` を実装。識別子・出力文言・キー割り当て・bit レイアウトは分割前の原名・原文のまま。
 - 描画色は **Catppuccin Mocha** の定数パレットに統一（数値 RGB リテラルは定数定義のみ）。
 - 日本語テキストは **FreeType を dlopen** で動的ロードして描画。freetype / 日本語フォントが無い環境では ASCII（`?` 代替）にフォールバック。
 - フレーム目標は 33ms（約 30fps）+ VSync。
@@ -26,8 +26,8 @@ DDMEditor は **SDL3** を使った対話型アプリで、次の 3 つの機能
 ### ビルド（CMakeLists.txt）
 
 - `cmake_minimum_required(4.4.2)`, C++20 必須。ccache があればビルドに使用。
-- 必須リンク: `SDL3::SDL3`、および `FinalSTATIC`（`/home/herb1s/Projects/NEELA/Final/build/Final.a` + include ディレクトリ）。
-- ビルド対象は `main.cpp` のみ。リポジトリ内の `Gimmick.cpp` / `Gimmick.h` は **main.cpp から参照されておらずビルドにも含まれません**（main.cpp 内の `gimmick()` 関数は独立実装）。
+- 必須リンク: `SDL3::SDL3` のみ（旧 `FinalSTATIC`（../Final/build/Final.a）は 2026-11-27 のユーザー判断により削除。参照不要）。
+- ビルド対象は CMakeLists.txt の `LIB_SOURCE` に列挙された .cpp（`main.cpp` + `prop` `document` `graph` `state` `guitext` `placeholders` `game` `console` `layout` `view` `editor` `props` `hud` `input` `app` `selftest`）。リポジトリ内の `Gimmick.cpp` / `Gimmick.h` は **どこからも参照されておらずビルドにも含まれません**（`gimmick()` は game.cpp の独立実装。現状維持）。
 
 ```sh
 cmake -S . -B build
@@ -350,7 +350,7 @@ phase と検証内容:
 | props edit | write helpers↔read helpers の全フィールド往復（timer/eyelevel の合成・分解、vacant bit 保持）、panel open（クリック/right-click）、describeElement の EDITOR variant、キーフロー（TAB/ENTER/Y/N/U/循環）、programmatic 編集 O1〜O16 + 各 option 1 回ずつ、validation warning 総数の照合、G 再構築（runtime 不変）、scene 切替で panel/nodeKey が壊れないこと、実描画の readback |
 | undo | 全 undo で baseline の prop・line text・dirty・graph・round-trip EXACT が完全復元すること、undo 上限（256）に未到達 |
 | font | freetype ready 時の日本語 glyph rasterize、実描画 frame の bright pixel・text/subtext1 実色 |
-| palette audit | 数値 RGB リテラルが kMC 定数定義のみであること（grep 相当の源码監査）、SDL_RenderDebugText は fallback のみ、pixel readback の実色で WCAG 4.5:1 を面×text/subtext1 の全組合せで測定 |
+| palette audit | 数値 RGB リテラルが kMC 定数定義のみであること（grep 相当の源码監査・対象は `main.cpp` / `guitext.cpp` / `palette.h` / `view.cpp` / `selftest.cpp` の 5 ファイル、line comment は監査対象外）、SDL_RenderDebugText は fallback のみ、pixel readback の実色で WCAG 4.5:1 を面×text/subtext1 の全組合せで測定 |
 | game-mode | H 往復、game では graph/HUD 実色が出ないこと（bright=0）、game でも runtime 挿入フローが動作、viewer 復帰後の描画復元 |
 | data unchanged | 最終で磁盘の data.txt が load 時のバイト列と完全一致（書き変わっていないこと）、round-trip 最終 EXACT |
 
@@ -373,19 +373,56 @@ phase と検証内容:
 
 ---
 
-## 10. ソース構成（現行）
+## 10. ソース構成（リファクタリング後）
 
-| 領域 | 内容 |
+リポジトリ直下（`src/` subdir なし）。依存は上→下の一方向（循環依存ゼロ）。各ヘッダは自己完結（`#pragma once`・使う型を自分で include）。
+
+| ファイル | 役割 |
 |---|---|
-| `main.cpp` L25–238 | Element / prop bit の read・write helper |
-| L240–508 | Strict Document モデル（loadDocument / parseElementLine / serializeDocument / verifyRoundTrip） |
-| L510–726 | Graph モデル（(scene,id) node、parent/child/required/excluded edge、adjacency、warnings） |
-| L728–1010 | グローバル state（runtime・GUI・editor・props・selftest の集約 state、kMC パレット定数） |
-| L1012–1418 | FreeType dlopen による日本語テキストエンジン（font candidate 探索・glyph cache・ASCII fallback） |
-| L1424–2188 | runtime のロジック（placeholder 展開、条件判定、コンテナ lifecycle、表示/目的リスト構築、タイマー、gimmick、移動モード、sendProperty） |
-| L2191–3196 | 描画（world↔screen、ノード箱、bezier edge、family view、constraint view、stdout dump、レイアウト） |
-| L3198–3921 | EDITOR 追加フロー・props 編集（validation・commit・undo・メニュー行・preview panel） |
-| L4037–4326 | HUD・graph overlay・pick/zoom/scene 切替・マウスイベント |
-| L4328–4752 | AppInit / AppEvent（キー分岐・挿入フロー・UI/View モード切替） |
-| L4554–6945 | AppIterate（DDM_SELFTEST の全 phase、通常描画ループ） |
-| L6947–7001 | backupData・SDL_AppQuit（write policy・legacy write-back） |
+| `prop.h` / `prop.cpp` | Element struct・prop bit レイアウト文書・get/has/setSlot/edit helper・buildProperty |
+| `document.h` / `document.cpp` | Strict Document モデル（loadDocument / parseElementLine / serializeDocument / verifyRoundTrip / printRoundTripReport / printDocumentToStdout / backupData） |
+| `graph.h` / `graph.cpp` | GraphIndex（NodeKind / nodeKey / buildGraph。Document を受け取る純関数） |
+| `state.h` / `state.cpp` | 全グローバル状態・enum・定数・kPropsFields の宣言（state.h）/ 定義（state.cpp） |
+| `guitext.h` / `guitext.cpp` | FreeType dlopen・フォント候補探索・glyph texture・drawGuiText |
+| `placeholders.h` / `placeholders.cpp` | `%(変数名)` 展開 |
+| `game.h` / `game.cpp` | 配信条件 cond1-8・タイマー・gimmick・コンテナ再構築・move mode・processContainerLifecycle・sendProperty |
+| `console.h` / `console.cpp` | renderConsole（stdout のコンソール 2 段）・cancelInsertMode |
+| `palette.h` | Catppuccin Mocha 定数・wcagLuminance / wcagContrast |
+| `layout.h` / `layout.cpp` | layoutScene / family forest / nodePos / applyActiveLayout / fitViewToScene |
+| `view.h` / `view.cpp` | viewport 変換・describeElement・ノード/辺/family/constraint 描画・pickNode / zoomAt / switchScene |
+| `editor.h` / `editor.cpp` | EDITOR add flow（stage machine・compose・commit・baseline 復元） |
+| `props.h` / `props.cpp` | props menu 編集・validation・undo（上限 256） |
+| `hud.h` / `hud.cpp` | drawEditorOverlay / drawHud / drawGraphOverlay / printSelectedElementDetails |
+| `input.h` / `input.cpp` | SDL_AppEvent のハンドラ群（キー優先順位・遮断条件・挿入モード分岐） |
+| `app.h` / `app.cpp` | setUiMode・SDL_AppQuit の teardown（write policy・backup・legacy write-back） |
+| `selftest.h` / `selftest.cpp` | runSelftest()・10 phase 関数 |
+| `main.cpp` | SDL callbacks 薄層（AppInit / AppEvent 委譲 / AppIterate（selftest 分岐 + frame loop）/ AppQuit 委譲） |
+| `Gimmick.h` / `Gimmick.cpp` | 参照されない旧ファイル（ビルド対象外・現状維持） |
+
+## 11. 作業の性質別 ファイル指針（どこを見て、何を見なくてよいか）
+
+| 作業 | 見る場所 | 見なくてよい場所 |
+|---|---|---|
+| prop bit レイアウト / 値抽出・set | `prop.h` / `prop.cpp`（他ファイル不要） | 描画・runtime 系すべて |
+| data.txt の読み書き・正格式・round-trip・backup | `document.h` / `document.cpp` | graph・view・selftest |
+| ノード/辺/scene 索引の構築 | `graph.h` / `graph.cpp` | 描画・game |
+| 状態・enum・定数・global | `state.h`（宣言）/ `state.cpp`（定義） | 各機能の実装本体 |
+| 日本語フォント・テキスト描画 | `guitext.h` / `guitext.cpp` | game・props・selftest |
+| プレースホルダ展開 | `placeholders.h` / `placeholders.cpp` | 描画系 |
+| コンテナ再構築・配信条件・タイマー・sendProperty・gimmick | `game.h` / `game.cpp` | guitext・selftest・描画 |
+| console 出力文言・挿入モード | `console.h` / `console.cpp`（テキスト入力の受付は `input.cpp`） | view・hud |
+| 色・WCAG・パレット | `palette.h`（hex 値は変更禁止） | ゲームロジック |
+| レイアウト・view 座標系 | `layout.h` / `layout.cpp` | game・document |
+| graph/family/constraint 描画・describeElement・視点操作 | `view.h` / `view.cpp` | game・editor・props |
+| Element 追加フロー | `editor.h` / `editor.cpp` | view・game |
+| props メニュー編集・undo | `props.h` / `props.cpp` | view・game |
+| HUD・overlay・selected 表示 | `hud.h` / `hud.cpp` | game・document |
+| キー/マウスの割り当てと優先順位 | `input.h` / `input.cpp` | 描画・game 本体 |
+| 自己検証の各 phase | `selftest.cpp` | 全て（自己検証は仕様照合側） |
+| SDL callbacks・起動/終了・write policy・UI モード切替 | `main.cpp` + `app.h` / `app.cpp` | 各機能の内部 |
+
+「触らなくてよい」例: ゲームロジックの変更なら guitext / selftest / view を読まない。色変更なら palette.h の定数のみ（描画呼び出しは触らない）。data.txt の内容編集はソース変更なし（正格式・区切り '-' の契約は document.h の文書どおり）。
+
+## 12. 旧単一ファイル版の領域対応（歴史参照）
+
+旧 `main.cpp`（7148 行・2026-11-26 時点）のセクションは上記モジュールへ行単位で転写されています（ロジック・identifier・出力不変）。旧行番号の対応が必要な場合は `refactor_plan.md` §2 の構造マップと各セッションの引き継ぎ（§7）を参照してください。
